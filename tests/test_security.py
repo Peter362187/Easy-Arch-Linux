@@ -16,7 +16,6 @@ import pytest
 from archcustomiser.core.logging_setup import SecretRedactionFilter, redaction_filter
 from archcustomiser.core.secrets import Secret, SecretStore
 
-
 # ---------------------------------------------------------------------------
 # Passwoerter
 # ---------------------------------------------------------------------------
@@ -28,7 +27,7 @@ def test_secret_hides_itself_in_every_string_form() -> None:
     assert "hunter2" not in str(secret)
     assert "hunter2" not in f"{secret}"
     assert "hunter2" not in f"{secret!r}"
-    assert "hunter2" not in "{}".format(secret)
+    assert "hunter2" not in f"{secret}"
     assert secret.reveal() == "hunter2-geheim"
 
 

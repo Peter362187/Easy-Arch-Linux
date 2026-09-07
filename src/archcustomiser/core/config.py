@@ -18,9 +18,10 @@ Zwei Prinzipien bestimmen den Aufbau:
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Iterable
+from typing import Any
 
 SCHEMA_VERSION = 1
 
@@ -234,7 +235,7 @@ class BuildConfig:
         return self.field_bool("user.create", True) and bool(self.username)
 
     # -- Kopie ---------------------------------------------------------------
-    def copy(self) -> "BuildConfig":
+    def copy(self) -> BuildConfig:
         return BuildConfig(
             schema_version=self.schema_version,
             catalog_version=self.catalog_version,

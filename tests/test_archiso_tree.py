@@ -21,7 +21,6 @@ from archcustomiser.core.archiso.errors import (
 from archcustomiser.core.archiso.sinks import MARKER_NAME, DirectorySink, TarSink
 from archcustomiser.core.archiso.tree import ProfileTree, normalise_path
 
-
 # ---------------------------------------------------------------------------
 # Pfadsicherheit
 # ---------------------------------------------------------------------------

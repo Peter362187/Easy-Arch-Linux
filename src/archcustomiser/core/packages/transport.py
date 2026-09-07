@@ -11,10 +11,11 @@ import logging
 import socket
 import urllib.error
 import urllib.request
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from email.utils import formatdate, parsedate_to_datetime
-from datetime import datetime, timezone
-from typing import Mapping, Protocol
+from typing import Protocol
 
 from .errors import MirrorError, NetworkUnavailable
 
@@ -53,7 +54,7 @@ class HttpResponse:
         except (TypeError, ValueError):
             return None
         if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
+            parsed = parsed.replace(tzinfo=UTC)
         return parsed
 
     @property
@@ -134,7 +135,7 @@ class UrllibTransport:
             if isinstance(reason, (socket.gaierror, socket.timeout, TimeoutError, ConnectionError)):
                 raise NetworkUnavailable(f"{url}: {reason}") from exc
             raise NetworkUnavailable(f"{url}: {reason}") from exc
-        except (TimeoutError, socket.timeout) as exc:
+        except TimeoutError as exc:
             raise NetworkUnavailable(f"{url}: Zeitueberschreitung") from exc
         except OSError as exc:
             raise NetworkUnavailable(f"{url}: {exc}") from exc

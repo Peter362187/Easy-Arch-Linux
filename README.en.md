@@ -82,7 +82,7 @@ stays responsive while the build is being stopped.
 1. **Code → Download ZIP** on the project page, or:
 
    ```bash
-   git clone https://github.com/Peter362187/ArchCustomiser.git
+   git clone https://github.com/Peter362187/Easy-Arch-Linux.git
    ```
 
 2. Double-click **`ArchCustomiser.bat`**.
@@ -95,7 +95,7 @@ Python to PATH"**. Python 3.11 or newer is required.
 ### Linux and macOS
 
 ```bash
-git clone https://github.com/Peter362187/ArchCustomiser.git && cd ArchCustomiser
+git clone https://github.com/Peter362187/Easy-Arch-Linux.git && cd Easy-Arch-Linux
 ```
 
 ```bash
@@ -124,7 +124,7 @@ python -m venv .venv && .venv/bin/pip install -e ".[dev]"
 Or, without a source directory:
 
 ```bash
-pipx install git+https://github.com/Peter362187/ArchCustomiser.git
+pipx install git+https://github.com/Peter362187/Easy-Arch-Linux.git
 ```
 
 **On a minimal Linux install** PySide6 ships Qt but not its system libraries, so

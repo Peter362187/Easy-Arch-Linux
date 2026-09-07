@@ -38,10 +38,9 @@ from PySide6.QtWidgets import (
 from ...core.build import BuildOutcome, Step
 from ...core.build.errors import BuildFailed, PreflightError
 from .. import theme
-from .common import brush, open_path
-from .step_sidebar import MARK_CURRENT, MARK_DONE, MARK_OPEN
 from ..build_worker import BuildJob
-from .common import passende_mindestgroesse
+from .common import brush, open_path, passende_mindestgroesse
+from .step_sidebar import MARK_CURRENT, MARK_DONE, MARK_OPEN
 
 log = logging.getLogger(__name__)
 

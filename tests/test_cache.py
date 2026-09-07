@@ -7,12 +7,11 @@ stillen Falschdaten fuehren. Lieber neu laden als etwas Halbes verwenden.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime
 
 import pytest
 
 from archcustomiser.core.packages.cache import PackageCache
-from archcustomiser.core.packages.errors import CacheError
 
 from .conftest import build_fake_syncdb
 
@@ -30,7 +29,7 @@ def store(cache: PackageCache, data: bytes = DATA):
         data,
         url="https://example.invalid/core.db",
         etag='"abc"',
-        last_modified=datetime(2026, 8, 28, 20, 4, tzinfo=timezone.utc),
+        last_modified=datetime(2026, 8, 28, 20, 4, tzinfo=UTC),
         package_count=1,
     )
 

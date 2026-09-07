@@ -23,9 +23,9 @@ from __future__ import annotations
 import logging
 import re
 import shutil
-from datetime import datetime, timezone
+from collections.abc import Sequence
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Sequence
 
 from ..paths import cache_dir, ensure_dir
 from .backend import (
@@ -35,7 +35,12 @@ from .backend import (
     ProgressCallback,
     RefreshPolicy,
 )
-from .errors import BackendUnavailable, PacmanInvocationError, PacmanNotAvailable, RepositoryDataError
+from .errors import (
+    BackendUnavailable,
+    PacmanInvocationError,
+    PacmanNotAvailable,
+    RepositoryDataError,
+)
 from .index import RepoIndex, build_index
 from .models import BackendCapabilities, IndexMetadata, PackageInfo, RepoMeta
 from .names import validate_name
@@ -109,7 +114,7 @@ class PacmanSyncBackend:
             path = self._db_path(repo)
             if not path.is_file():
                 continue
-            stamp = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+            stamp = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
             repos.append(
                 RepoMeta(
                     name=repo,
@@ -162,7 +167,7 @@ class PacmanSyncBackend:
                 log.warning("%s", exc.technical)
                 continue
 
-            stamp = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+            stamp = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
             repo_packages.append((repo, packages))
             metas.append(
                 RepoMeta(

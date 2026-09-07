@@ -11,7 +11,6 @@ import pytest
 from archcustomiser.core.packages.models import EntryKind
 from archcustomiser.core.packages.validator import classify, validate_all
 
-
 # ---------------------------------------------------------------------------
 # Die zentrale Zusicherung
 # ---------------------------------------------------------------------------

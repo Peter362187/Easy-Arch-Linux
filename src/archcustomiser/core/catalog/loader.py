@@ -12,8 +12,9 @@ anzufassen. Zusammengefuehrt wird ueber ``category.id`` + ``option.id``.
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 import yaml
 
@@ -793,19 +794,21 @@ def _check_references(
                     f"das nicht existiert"
                 )
 
-    for name, capability in capabilities.items():
-        if capability.default_provider and capability.default_provider not in known_refs:
+    # Der Name unterscheidet sich bewusst von der Schleife weiter oben, die
+    # ueber 'option.provides' und damit ueber Zeichenketten laeuft.
+    for name, spec in capabilities.items():
+        if spec.default_provider and spec.default_provider not in known_refs:
             raise CatalogError(
-                f"Capability {name!r}: default_provider {capability.default_provider!r} "
+                f"Capability {name!r}: default_provider {spec.default_provider!r} "
                 f"existiert nicht"
             )
-        if capability.arity is Arity.ONE and not capability.default_provider:
+        if spec.arity is Arity.ONE and not spec.default_provider:
             log.warning(
                 "Capability %r verlangt genau einen Anbieter, hat aber keinen "
                 "default_provider -- unerfuellbare Auswahlen sind moeglich",
                 name,
             )
-        for leaf in capability.required_if:
+        for leaf in spec.required_if:
             check_leaf(leaf, f"Capability {name}.required_if")
 
     unknown_categories = set()

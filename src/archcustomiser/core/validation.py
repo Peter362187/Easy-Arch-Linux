@@ -12,9 +12,10 @@ abstuerzen.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 MAX_HOSTNAME_LENGTH = 63
 MAX_USERNAME_LENGTH = 32

@@ -18,8 +18,9 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Mapping, Protocol, Sequence
+from typing import Protocol
 
 from .errors import PacmanInvocationError
 
@@ -39,7 +40,7 @@ class CommandResult:
     def ok(self) -> bool:
         return self.returncode == 0
 
-    def raise_for_status(self) -> "CommandResult":
+    def raise_for_status(self) -> CommandResult:
         if not self.ok:
             raise PacmanInvocationError(self.returncode, self.stderr[-MAX_STDERR_TAIL:])
         return self

@@ -30,6 +30,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         metavar="ZIEL",
         help="Zieldatei (.tar.gz) oder Zielverzeichnis fuer --export-profile",
     )
+    parser.add_argument(
+        "--offline",
+        action="store_true",
+        help="Keine Paketdaten laden -- Namen gelten dann als nicht pruefbar",
+    )
     parser.add_argument("-v", "--verbose", action="store_true", help="Ausfuehrliche Ausgabe")
     parser.add_argument("--no-log-file", action="store_true", help="Nicht in eine Datei protokollieren")
     return parser.parse_args(argv)
@@ -37,6 +42,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
+
+    if args.out and not args.export_profile:
+        print("Fehler: --out ergibt nur zusammen mit --export-profile Sinn", file=sys.stderr)
+        return 2
+    if args.export_profile and args.dry_run:
+        print(
+            "Fehler: --export-profile und --dry-run schliessen sich aus",
+            file=sys.stderr,
+        )
+        return 2
 
     from .core.logging_setup import setup_logging
 
@@ -66,7 +81,7 @@ def main(argv: list[str] | None = None) -> int:
         return _export_profile(Path(args.export_profile), Path(args.out))
 
     if args.dry_run:
-        return _dry_run(Path(args.dry_run))
+        return _dry_run(Path(args.dry_run), offline=args.offline)
 
     if log_path:
         # Unter pythonw.exe gibt es kein stdout -- print() ist dort wirkungslos.
@@ -125,14 +140,31 @@ def _install_crash_handler(log_path: Path | None) -> None:
     sys.excepthook = behandeln
 
 
-def _dry_run(profile_path: Path) -> int:
-    from .core.catalog import load_catalog
+def _katalog_oder_fehler():
+    """Laedt den Katalog und meldet einen Fehler verstaendlich.
+
+    Auf der Kommandozeile fuehrte ein fehlerhaftes Katalog-Overlay
+    bisher zu einem Traceback, waehrend der Weg ueber die Oberflaeche
+    denselben Fall sauber meldet.
+    """
+    from .core.catalog import CatalogError, load_catalog
+
+    try:
+        return load_catalog()
+    except CatalogError as exc:
+        print(f"Fehler: Der Optionskatalog ist fehlerhaft: {exc}", file=sys.stderr)
+        return None
+
+
+def _dry_run(profile_path: Path, *, offline: bool = False) -> int:
     from .core.packages import PackageService
     from .core.plan import build_plan, plan_as_text
     from .core.profiles import ProfileError, ProfileService
     from .core.resolver import Resolver
 
-    catalog = load_catalog()
+    catalog = _katalog_oder_fehler()
+    if catalog is None:
+        return 2
     service = ProfileService(catalog)
     try:
         loaded = service.load(profile_path)
@@ -144,9 +176,15 @@ def _dry_run(profile_path: Path) -> int:
         print(f"[{issue.severity}] {issue.message}", file=sys.stderr)
 
     resolution = Resolver(catalog).resolve(loaded.config)
-    packages = PackageService()
-    packages.load()
-    report = packages.validate(resolution.package_names)
+    if offline:
+        # Ein Trockenlauf, der Pakete nachlaedt, ist keiner: der Aufruf
+        # oeffnete bisher ungefragt Verbindungen zu einem Spiegelserver
+        # (rund 9 MB) oder startete pacman als Unterprozess.
+        report = None
+    else:
+        packages = PackageService()
+        packages.load()
+        report = packages.validate(resolution.package_names)
     plan = build_plan(catalog, loaded.config, resolution, report)
     print(plan_as_text(plan))
     return 0 if plan.can_build else 1
@@ -162,12 +200,13 @@ def _export_profile(profile_path: Path, target: Path) -> int:
     """
     from .core.archiso import DirectorySink, ProfileGenerator, TarSink
     from .core.archiso.errors import ProfileError
-    from .core.catalog import load_catalog
     from .core.profiles import ProfileError as ProfileFileError
     from .core.profiles import ProfileService
     from .core.resolver import Resolver
 
-    catalog = load_catalog()
+    catalog = _katalog_oder_fehler()
+    if catalog is None:
+        return 2
     try:
         loaded = ProfileService(catalog).load(profile_path)
     except ProfileFileError as exc:
@@ -182,6 +221,7 @@ def _export_profile(profile_path: Path, target: Path) -> int:
         return 1
 
     as_archive = target.suffix in (".gz", ".tgz") or target.name.endswith(".tar.gz")
+    sink: TarSink | DirectorySink
     if as_archive:
         sink = TarSink(target, root_name=f"{generated.settings.iso_name}-profil")
     else:

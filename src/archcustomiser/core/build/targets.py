@@ -25,19 +25,21 @@ Die drei Umsetzungen:
 from __future__ import annotations
 
 import logging
-import shutil
 import re
+import shutil
 import subprocess
 import time
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, Callable, Mapping, Protocol, Sequence
+from typing import TYPE_CHECKING, Protocol
 
-from .errors import MkarchisoMissing
+from .errors import BuildError, MkarchisoMissing
 from .limits import cpu_budget, describe_budget, host_cores
 
 if TYPE_CHECKING:
     from .preflight import PreflightReport
+    from .wsl_build import WslPaths
 from ..archiso.quoting import shell_quote
 
 log = logging.getLogger(__name__)
@@ -121,7 +123,7 @@ class ExecutionTarget(Protocol):
         paths: BuildPaths,
         *,
         iso_name: str,
-        on_progress: "Callable[[float, str], None] | None" = None,
+        on_progress: Callable[[float, str], None] | None = None,
     ) -> None:
         """Bringt den Profilbaum dorthin, wo mkarchiso ihn findet."""
 
@@ -142,7 +144,7 @@ class ExecutionTarget(Protocol):
         *,
         installed_mb: int = 0,
         bootmodes: Sequence[str] = (),
-    ) -> "PreflightReport":
+    ) -> PreflightReport:
         """Prueft dort, wo tatsaechlich gebaut wird.
 
         Bei einem Bau in WSL oder im Container waere eine Pruefung des
@@ -151,7 +153,7 @@ class ExecutionTarget(Protocol):
         """
 
     def cancel_run(
-        self, process: "subprocess.Popen[bytes] | None", *, grace_seconds: float
+        self, process: subprocess.Popen[bytes] | None, *, grace_seconds: float
     ) -> None:
         """Beendet den laufenden Bau -- dort, wo er wirklich laeuft.
 
@@ -191,7 +193,7 @@ def _verlangt_eigenes_profil(pfad: Path) -> None:
     # 'work' legt mkarchiso selbst an; dort steht nichts vom Benutzer.
     if pfad.name == "work" and (pfad / "x86_64").exists():
         return
-    raise TargetNotEmptyError(str(pfad))
+    raise TargetNotEmptyError(str(pfad), len(inhalt))
 
 
 class LocalTarget:
@@ -406,7 +408,7 @@ class WslExecutionTarget:
         self._cpu_note = ""
         # Erst prepare() weiss, wo drueben gearbeitet wird. Ein Abbruch kann
         # aber schon davor kommen.
-        self._paths = None
+        self._paths: WslPaths | None = None
 
     def resolve_executable(self) -> str:
         if not self.wsl.has_command("mkarchiso"):
@@ -598,6 +600,11 @@ class WslExecutionTarget:
         """
         from .wsl_build import transfer_profile
 
+        if self._paths is None:
+            raise ValueError(
+                "deliver_profile ohne vorheriges prepare(): die Verzeichnisse "
+                "in der Verteilung stehen noch nicht fest."
+            )
         if on_progress is not None:
             on_progress(0.3, "Archiv wird gepackt")
         transfer_profile(self.wsl, tree, self._paths, iso_name)
@@ -611,7 +618,7 @@ class WslExecutionTarget:
     ) -> None:
         from .wsl_build import cleanup
 
-        if getattr(self, "_paths", None) is None:
+        if self._paths is None:
             return
         cleanup(
             self.wsl,
@@ -1021,7 +1028,7 @@ class TargetOption:
 
     kind: str                     # "lokal" | "wsl" | "container"
     label: str                    # eine Zeile fuer den Benutzer
-    target: "ExecutionTarget | None" = None
+    target: ExecutionTarget | None = None
     problem: str = ""             # gefuellt, wenn dieser Weg hier nicht geht
     remedy: str = ""              # was der Benutzer dagegen tun kann
 

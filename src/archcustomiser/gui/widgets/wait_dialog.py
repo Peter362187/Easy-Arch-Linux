@@ -13,7 +13,8 @@ zaehlt, ist die Auskunft "es passiert etwas" und die Moeglichkeit, aufzugeben.
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, Signal, Slot
 from PySide6.QtWidgets import QDialog, QLabel, QProgressBar, QPushButton, QVBoxLayout, QWidget

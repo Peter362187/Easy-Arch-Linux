@@ -20,25 +20,23 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
-    QLabel,
     QMessageBox,
-    QVBoxLayout,
     QWidget,
     QWizard,
 )
 
-from ..core.catalog import Catalog, Category
 from ..core.build.preflight import NOT_BUILDABLE_HERE
+from ..core.catalog import Catalog, Category
 from ..core.environment import Environment
+from ..core.logging_setup import log_file_path
 from ..core.paths import ensure_dir, user_profiles_dir
 from ..core.plan import plan_as_text
-from ..core.logging_setup import log_file_path
 from ..core.profiles import ProfileError, ProfileService
+from .build_worker import BuildJob
 from .packages_worker import PackageController
 from .pages.base import CatalogPageBase
 from .pages.factory import PageFactory
@@ -46,13 +44,12 @@ from .pages.summary import SummaryPage
 from .pages.welcome import WELCOME_STEP, WelcomePage
 from .profile_worker import ProfileExporter
 from .store import SelectionStore
-from .build_worker import BuildJob
 from .widgets.build_dialog import BuildDialog
+from .widgets.common import passende_mindestgroesse
 from .widgets.export_dialog import ErrorDialog, ExportResultDialog
 from .widgets.preflight_dialog import PreflightDialog
 from .widgets.step_sidebar import StepSidebar, StepState
 from .widgets.wsl_dialog import WslSetupDialog
-from .widgets.common import passende_mindestgroesse
 
 log = logging.getLogger(__name__)
 
@@ -499,7 +496,6 @@ class BuildWizard(QWizard):
         Geht keiner davon, gibt es statt einer Fehlermeldung den Profil-Export:
         das Ergebnis laesst sich dann auf einem Arch-System bauen.
         """
-        import sys as _sys
 
         page = self.currentPage()
         plan = page.plan() if isinstance(page, SummaryPage) else None

@@ -11,8 +11,8 @@ Wichtig: gefiltert werden ``record.msg`` *und* ``record.args``, sonst rutscht
 from __future__ import annotations
 
 import logging
-import os
 import logging.handlers
+import os
 import re
 from collections import Counter
 from pathlib import Path

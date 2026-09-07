@@ -25,8 +25,9 @@ ueberfluessig.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
-from typing import Any, Iterable, Literal, Mapping
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
+from typing import Any, Literal
 
 from .catalog import Arity, Catalog, EnableIn, FileEntry, Option, SelectionMode, ServiceRef
 from .config import BuildConfig
@@ -99,7 +100,7 @@ class Resolution:
     issues: tuple[Issue, ...]
     estimated_size_mb: int = 0
 
-    def mit_repositories(self, weitere: Iterable[str]) -> "Resolution":
+    def mit_repositories(self, weitere: Iterable[str]) -> Resolution:
         """Dieselbe Aufloesung, um zusaetzliche Repositorien ergaenzt.
 
         Der Katalog nennt ein Repository nur an der Option, die es braucht
@@ -165,7 +166,7 @@ class Resolution:
 class _Context:
     """Auswertungskontext fuer Praedikate waehrend der Aufloesung."""
 
-    __slots__ = ("refs", "caps", "config")
+    __slots__ = ("caps", "config", "refs")
 
     def __init__(self, refs: set[str], caps: set[str], config: BuildConfig) -> None:
         self.refs = refs

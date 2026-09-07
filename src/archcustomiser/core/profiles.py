@@ -24,10 +24,11 @@ from __future__ import annotations
 import logging
 import os
 import tempfile
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, Mapping, Sequence
+from typing import Any, Literal
 
 import yaml
 
@@ -48,6 +49,14 @@ ProfileIssueCode = Literal[
     "secret_dropped",
     "invalid_package",
 ]
+
+
+# Innerhalb von ``ProfileService`` verdeckt die Methode ``list()`` den
+# eingebauten Typ: eine Annotation ``list[ProfileIssue]`` bezeichnet dort
+# die Methode, nicht die Liste. Diese Aliase stehen deshalb hier oben, wo
+# ``list`` noch der eingebaute Typ ist.
+_Issues = list  # type: ignore[assignment]
+_Namen = list  # type: ignore[assignment]
 
 
 class ProfileError(Exception):
@@ -160,7 +169,7 @@ class ProfileService:
             "schema_version": SCHEMA_VERSION,
             "catalog_version": self.catalog.catalog_version,
             "name": config.profile_name or path.stem,
-            "created": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+            "created": datetime.now(UTC).replace(microsecond=0).isoformat(),
             "selections": {key: sorted(value) for key, value in sorted(selections.items())},
             "fields": self._fields_without_secrets(config),
         }
@@ -386,8 +395,8 @@ class ProfileService:
         category_id: str,
         option_id: str,
         config: BuildConfig,
-        issues: list[ProfileIssue],
-        snapshot_packages: list[str],
+        issues: _Issues[ProfileIssue],
+        snapshot_packages: _Namen[str],
     ) -> None:
         """Erster Treffer gewinnt; ein Fehlschlag ist nie fatal."""
         ref = f"{category_id}.{option_id}"
@@ -425,8 +434,7 @@ class ProfileService:
                     code="renamed",
                     ref=ref,
                     message=(
-                        f"{ref} heisst inzwischen "
-                        f"{self.catalog.option(alias_target).label if self.catalog.option(alias_target) else alias_target}."
+                        f"{ref} heisst inzwischen {_beschriftung(self.catalog, alias_target)}."
                     ),
                     action_taken=f"auf {alias_target} abgebildet",
                 )
@@ -572,3 +580,13 @@ def _geprueftes_paket(text: str) -> str | None:
     except Exception:
         return None
     return roh
+
+
+def _beschriftung(catalog, ref: str) -> str:
+    """Die Beschriftung einer Option -- oder ihre Kennung, wenn es sie nicht gibt.
+
+    Ein Alias kann auf eine inzwischen entfernte Option zeigen; der Code
+    rechnet an anderer Stelle selbst damit.
+    """
+    option = catalog.option(ref)
+    return option.label if option is not None else ref

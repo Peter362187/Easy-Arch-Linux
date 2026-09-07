@@ -21,8 +21,8 @@ das dieser Baum unter ``permissions`` sammelt.
 from __future__ import annotations
 
 import posixpath
+from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Iterator
 
 from .errors import DuplicateEntryError, UnsafePathError
 

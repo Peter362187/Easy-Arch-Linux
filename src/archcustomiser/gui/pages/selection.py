@@ -27,8 +27,8 @@ from PySide6.QtWidgets import (
 
 from ...core.catalog import Category, Option, SelectionMode
 from ...core.config import SelectionSource
-from ..store import SelectionStore
 from .. import theme
+from ..store import SelectionStore
 from ..widgets.common import SearchField
 from ..widgets.option_widget import OptionWidget
 from .base import CatalogPageBase

@@ -20,7 +20,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from PySide6.QtCore import QTimer, QUrl, Qt
+from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QBrush, QColor, QDesktopServices
 from PySide6.QtWidgets import (
     QApplication,
@@ -173,7 +173,7 @@ class SearchField(QWidget):
         layout.addWidget(self.count_label, 0, Qt.AlignmentFlag.AlignVCenter)
 
     @property
-    def textChanged(self):          # noqa: N802  -- Qt-Namenskonvention
+    def textChanged(self):
         return self.edit.textChanged
 
     def text(self) -> str:

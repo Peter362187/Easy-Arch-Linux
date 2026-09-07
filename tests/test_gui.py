@@ -16,9 +16,7 @@ import pytest
 pytest.importorskip("PySide6")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication   # noqa: E402
-
-from archcustomiser.core.config import SelectionSource   # noqa: E402
+from PySide6.QtWidgets import QApplication
 
 
 @pytest.fixture(scope="session")
@@ -318,8 +316,8 @@ def test_every_button_signature_actually_matches(qapp, monkeypatch) -> None:
 def test_cancelling_does_not_block_the_interface(qapp, catalog, resolver) -> None:
     import time
 
-    from tests.test_build_controller import make_config
     from archcustomiser.gui.build_worker import BuildJob
+    from tests.test_build_controller import make_config
 
     config = make_config()
     job = BuildJob(catalog, config, resolver.resolve(config))
@@ -351,8 +349,8 @@ def test_cancelling_does_not_block_the_interface(qapp, catalog, resolver) -> Non
 
 
 def test_a_second_click_does_not_start_a_second_cancel(qapp, catalog, resolver) -> None:
-    from tests.test_build_controller import make_config
     from archcustomiser.gui.build_worker import BuildJob
+    from tests.test_build_controller import make_config
 
     config = make_config()
     job = BuildJob(catalog, config, resolver.resolve(config))
@@ -471,8 +469,6 @@ def test_escape_does_not_abandon_a_running_build(qapp, tmp_path, monkeypatch) ->
     Bau-Faden lief weiter, ein zweiter Bau war startbar, und beim Beenden
     zerstoerte Qt einen laufenden QThread.
     """
-    from PySide6.QtCore import Qt
-    from PySide6.QtGui import QKeyEvent
     from PySide6.QtWidgets import QMessageBox
 
     from archcustomiser.gui.widgets.build_dialog import BuildDialog

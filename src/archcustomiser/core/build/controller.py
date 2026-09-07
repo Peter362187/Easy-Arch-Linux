@@ -24,24 +24,24 @@ import logging
 import threading
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
-from typing import Callable
 
 from ..archiso import GeneratedProfile, ProfileGenerator
-from ..archiso.settings import derive_bootmodes
 from ..archiso.errors import ProfileError
+from ..archiso.settings import derive_bootmodes
 from ..catalog import Catalog
 from ..config import BuildConfig
 from ..resolver import Resolution
 from ..secrets import SecretStore
+from . import targets as targets_module
 from .errors import BuildCancelled, BuildError
 from .preflight import PreflightReport
 from .progress import ProgressState
 from .runner import MAX_KEPT_LINES, BuildResult, MkarchisoRunner
-from . import targets as targets_module
 from .targets import BuildPaths, ExecutionTarget, LocalTarget
 
 log = logging.getLogger(__name__)
@@ -223,7 +223,7 @@ class BuildController:
                 paths.work,
                 paths.out,
                 privilege_mode=report.privilege_mode,
-                source_date_epoch=int(datetime.now(timezone.utc).timestamp()),
+                source_date_epoch=int(datetime.now(UTC).timestamp()),
                 target=self.target,
             )
             with self._lock:

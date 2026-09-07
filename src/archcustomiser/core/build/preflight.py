@@ -15,9 +15,9 @@ import logging
 import os
 import shutil
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Sequence
 
 from ..environment import CONDITIONAL_TOOLS, Environment, detect_environment
 from .errors import PreflightError

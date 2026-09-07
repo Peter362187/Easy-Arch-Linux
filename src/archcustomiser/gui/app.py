@@ -5,16 +5,15 @@ from __future__ import annotations
 import logging
 import sys
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from ..core.catalog import CatalogError, load_catalog
 from ..core.environment import detect_environment
 from ..core.packages import PackageService
 from ..core.profiles import ProfileService
+from . import theme
 from .packages_worker import PackageController
 from .store import SelectionStore
-from . import theme
 from .wizard import BuildWizard
 
 log = logging.getLogger(__name__)

@@ -28,9 +28,9 @@ import subprocess
 import threading
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
 
 from ..subprocess_util import popen as popen_ohne_fenster
 from .errors import BuildCancelled, BuildFailed
@@ -96,9 +96,9 @@ class MkarchisoRunner:
 
     def __init__(
         self,
-        profile_dir: Path,
-        work_dir: Path,
-        out_dir: Path,
+        profile_dir: Path | str,
+        work_dir: Path | str,
+        out_dir: Path | str,
         *,
         privilege_mode: str = "rootless",
         source_date_epoch: int | None = None,

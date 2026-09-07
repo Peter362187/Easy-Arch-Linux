@@ -21,9 +21,10 @@ import os
 import shutil
 import tarfile
 import tempfile
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Callable, Protocol
+from typing import Protocol
 
 from .errors import SinkError, SymlinksUnsupportedError, TargetNotEmptyError
 from .tree import ProfileTree
@@ -53,7 +54,7 @@ ProgressCallback = Callable[[int, int], None]   # (erledigt, gesamt)
 
 
 def _marker_content(iso_name: str) -> str:
-    stamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    stamp = datetime.now(UTC).replace(microsecond=0).isoformat()
     return (
         "# Von ArchCustomiser erzeugtes archiso-Profil.\n"
         "# Diese Datei kennzeichnet das Verzeichnis als ueberschreibbar.\n"

@@ -1,8 +1,16 @@
 """Kopiert das Projekt in einen geklonten Repository-Ordner.
 
-Uebernommen wird nur, was auch ins Repository gehoert -- die Regeln stammen
-aus derselben ``.gitignore``, die git spaeter anwendet. Ohne diese Filterung
-landeten 667 MB Programmumgebung und mehrere Gigabyte ISO-Dateien im Klon.
+Uebernommen wird genau das, was git auch uebernehmen wuerde -- ermittelt ueber
+``git ls-files``, nicht ueber eine Handkopie der ``.gitignore``. Die frueher
+hier gepflegte Musterliste war naemlich keine: sie liess ``*-profil/``,
+``/profiles-lokal/``, ``Thumbs.db``, ``desktop.ini`` und ``*.pyd`` aus, obwohl
+der Kopf des Moduls behauptete, die Regeln staemmten aus derselben Datei.
+
+Zweiter Unterschied: das Skript kopierte nur und loeschte nie. Eine in der
+Quelle geloeschte oder umbenannte Datei blieb im Ziel bestehen -- bei einer
+Umbenennung entstand so unbemerkt ein Duplikat, das beim naechsten Commit als
+weiterhin vorhanden gefuehrt wurde. Jetzt werden verwaiste Dateien im Ziel
+entfernt.
 
 Aufruf::
 
@@ -12,63 +20,83 @@ Aufruf::
 from __future__ import annotations
 
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
-# Verzeichnisse, die in beliebiger Tiefe nie mitgehen.
-AUSGESCHLOSSENE_ORDNER = {
-    ".venv", "venv", "env", ".git",
-    "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
-    ".vscode", ".idea",
-}
-
-# Nur GANZ OBEN ausgeschlossen. "build" und "out" sind auch Namen echter
-# Quellverzeichnisse -- src/archcustomiser/core/build/ etwa enthaelt das
-# gesamte ISO-Bau-System. Ohne diese Unterscheidung fehlten neun Quelldateien
-# im Repository, und die Anwendung liess sich daraus nicht starten.
-NUR_OBEN_AUSGESCHLOSSEN = {"build", "dist", "out", "work"}
-
-# Dateimuster, die nie mitgehen. Bilder unter assets/ sind ausdruecklich
-# KEINE Ausnahme -- sie gehoeren zum Programm.
-AUSGESCHLOSSENE_MUSTER = ("*.pyc", "*.pyo", "*.iso", "*.tar.gz", "*.log", "*.swp")
+# Das Zielverzeichnis ist ein Klon; sein eigenes .git wird nie angefasst.
+NIE_ANFASSEN = {".git"}
 
 
-def gehoert_dazu(pfad: Path, wurzel: Path) -> bool:
-    relativ = pfad.relative_to(wurzel)
-    if any(teil in AUSGESCHLOSSENE_ORDNER for teil in relativ.parts):
-        return False
-    if relativ.parts and relativ.parts[0] in NUR_OBEN_AUSGESCHLOSSEN:
-        return False
-    if any(relativ.match(muster) for muster in AUSGESCHLOSSENE_MUSTER):
-        return False
-    if relativ.suffix == ".egg-info" or ".egg-info" in str(relativ):
-        return False
-    return True
+def verfolgte_dateien(quelle: Path) -> list[str]:
+    """Alles, was git im Quellordner fuehren wuerde.
+
+    ``--cached`` nennt die bereits verfolgten Dateien, ``--others
+    --exclude-standard`` die neuen, die nicht ignoriert werden. Zusammen ist
+    das genau der Stand, der beim naechsten ``git add -A`` entstuende.
+    """
+    ergebnis = subprocess.run(
+        [
+            "git",
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "-z",
+        ],
+        cwd=str(quelle),
+        capture_output=True,
+        check=False,
+    )
+    if ergebnis.returncode != 0:
+        raise SystemExit(
+            "Der Quellordner ist kein Git-Repository -- ohne git laesst sich "
+            "nicht sagen, was hineingehoert.\n"
+            + ergebnis.stderr.decode("utf-8", errors="replace").strip()
+        )
+    roh = ergebnis.stdout.decode("utf-8", errors="replace")
+    return [name for name in roh.split(chr(0)) if name]
 
 
 def main(ziel: Path) -> int:
     quelle = Path(__file__).resolve().parent.parent
+    ziel = ziel.resolve()
 
-    if not (ziel / ".git").is_dir():
-        print(f"Fehler: {ziel} ist kein geklontes Repository.", file=sys.stderr)
-        return 2
+    if not ziel.is_dir():
+        raise SystemExit(f"{ziel} gibt es nicht.")
+    if ziel == quelle:
+        raise SystemExit("Quelle und Ziel sind derselbe Ordner.")
+
+    gewollt = verfolgte_dateien(quelle)
 
     kopiert = 0
-    bytes_gesamt = 0
-    for datei in sorted(quelle.rglob("*")):
-        if not datei.is_file() or not gehoert_dazu(datei, quelle):
+    for name in gewollt:
+        herkunft = quelle / name
+        if not herkunft.is_file():
             continue
-        relativ = datei.relative_to(quelle)
-        zieldatei = ziel / relativ
-        zieldatei.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(datei, zieldatei)
+        zielpfad = ziel / name
+        zielpfad.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(herkunft, zielpfad)
         kopiert += 1
-        bytes_gesamt += datei.stat().st_size
 
-    print(f"  {kopiert} Dateien kopiert ({bytes_gesamt / 1048576:.1f} MB)")
-    print(f"  nach {ziel}")
+    # Verwaiste Dateien im Ziel entfernen -- sonst ueberlebt eine geloeschte
+    # oder umbenannte Datei jeden weiteren Lauf.
+    behalten = {(ziel / name).resolve() for name in gewollt}
+    entfernt = 0
+    for vorhanden in sorted(ziel.rglob("*"), reverse=True):
+        if any(teil in NIE_ANFASSEN for teil in vorhanden.relative_to(ziel).parts):
+            continue
+        if vorhanden.is_file() and vorhanden.resolve() not in behalten:
+            vorhanden.unlink()
+            entfernt += 1
+        elif vorhanden.is_dir() and not any(vorhanden.iterdir()):
+            vorhanden.rmdir()
+
+    print(f"{kopiert} Dateien kopiert, {entfernt} verwaiste entfernt -> {ziel}")
     return 0
 
 
 if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        raise SystemExit("Aufruf: python tools/ins_repo_kopieren.py <zielordner>")
     raise SystemExit(main(Path(sys.argv[1])))

@@ -18,8 +18,7 @@ import pytest
 from archcustomiser.core.build.targets import BuildPaths, LocalTarget
 
 sys.path.insert(0, str(Path(__file__).parent))
-from fake_target import FakeTarget   # noqa: E402
-
+from fake_target import FakeTarget
 
 # ---------------------------------------------------------------------------
 # Der Controller darf den Zieltyp nicht mehr kennen

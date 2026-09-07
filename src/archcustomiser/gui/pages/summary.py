@@ -23,8 +23,6 @@ from PySide6.QtWidgets import (
     QTabWidget,
     QTreeWidget,
     QTreeWidgetItem,
-    QVBoxLayout,
-    QWidget,
 )
 
 from ...core.archiso import GeneratedProfile

@@ -22,7 +22,6 @@ import pytest
 from archcustomiser.core.build.limits import cpu_budget, host_cores, host_memory_gb
 from archcustomiser.core.build.targets import WslExecutionTarget
 
-
 # ---------------------------------------------------------------------------
 # Die Regel selbst
 # ---------------------------------------------------------------------------

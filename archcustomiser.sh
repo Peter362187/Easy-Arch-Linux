@@ -5,12 +5,10 @@
 #
 #      ./archcustomiser.sh
 #
-#  Richtet beim ersten Mal alles selbst ein und startet danach nur noch.
-#  Setzt nichts voraus ausser Python 3.11.
-#
-#  Wie in der .bat gilt: JEDER Fehlerweg sagt, was zu tun ist. Ein Skript,
-#  das wortlos zurueckkehrt, ist schlimmer als eines, das gar nicht erst
-#  startet.
+#  Dieses Skript sucht nur ein taugliches Python und uebergibt danach an
+#  tools/bootstrap.py. Alles Weitere -- Programmumgebung anlegen,
+#  Abhaengigkeiten installieren, pruefen, starten -- steht dort, einmal,
+#  gemeinsam mit ArchCustomiser.bat.
 #
 #  Bewusst POSIX-sh und nicht bash: auf einem frisch aufgesetzten Debian
 #  ohne bash-Erweiterungen und auf macOS mit seiner alten bash-Fassung
@@ -24,8 +22,6 @@ cd "$(dirname "$0")" || {
     echo "Der Ordner dieses Skripts liess sich nicht bestimmen." >&2
     exit 1
 }
-
-VENV_PY=".venv/bin/python"
 
 rot()  { printf '\033[31m%s\033[0m\n' "$*"; }
 fett() { printf '\033[1m%s\033[0m\n' "$*"; }
@@ -100,74 +96,18 @@ if [ -z "$PYTHON" ]; then
     exit 1
 fi
 
-# -- 2. Programmumgebung anlegen, falls sie fehlt ----------------------
-if [ ! -x "$VENV_PY" ]; then
-    echo
-    echo "  Einmalige Einrichtung. Das dauert ein paar Minuten und laedt"
-    echo "  rund 670 MB -- danach startet das Programm sofort."
-    echo
-    if ! "$PYTHON" -m venv .venv; then
-        # Eine halb angelegte Umgebung ist schlimmer als gar keine: der
-        # naechste Start haelt sie fuer fertig und scheitert woanders.
-        rm -rf .venv
-        echo
-        rot "  Die Programmumgebung liess sich nicht anlegen."
-        echo
-        echo "  Auf Debian und Ubuntu fehlt dafuer meist ein eigenes Paket:"
-        echo
-        echo "    sudo apt install python3-venv"
-        echo
-        echo "  Sonst ist es fehlendes Schreibrecht in diesem Ordner"
-        echo "  oder eine volle Festplatte."
-        echo
-        exit 1
-    fi
-fi
-
-# -- 3. Traegt die Umgebung? ------------------------------------------
-#  Pruefen statt hoffen -- das deckt die erste Einrichtung ab und ein
-#  "git pull", das eine neue Abhaengigkeit mitgebracht hat.
-if ! "$VENV_PY" -c 'import archcustomiser, PySide6' >/dev/null 2>&1; then
-    echo
-    echo "  Abhaengigkeiten werden installiert ..."
-    echo
-    "$VENV_PY" -m pip install --upgrade pip >/dev/null 2>&1 || true
-    if ! "$VENV_PY" -m pip install -e ".[dev]"; then
-        echo
-        rot "  Die Installation ist fehlgeschlagen."
-        echo
-        echo "  Die Meldungen darueber sagen, woran es lag. Haeufig ist es"
-        echo "  eine fehlende Internetverbindung."
-        echo
-        exit 1
-    fi
-    # Noch einmal pruefen -- pip kann melden, fertig zu sein, ohne dass
-    # sich das Programm danach importieren laesst.
-    if ! "$VENV_PY" -c 'import archcustomiser, PySide6' >/dev/null 2>&1; then
-        echo
-        rot "  Die Installation lief durch, das Programm laesst sich aber"
-        rot "  trotzdem nicht laden. Die genaue Meldung:"
-        echo
-        "$VENV_PY" -c 'import archcustomiser, PySide6' || true
-        echo
-        exit 1
-    fi
-    echo
-    echo "  Fertig eingerichtet."
-    echo
-fi
-
-# -- 4. Starten --------------------------------------------------------
-#  Im Vordergrund, anders als die .bat: dort verhindert pythonw ein
-#  zweites schwarzes Fenster. Hier wurde das Skript ohnehin aus einem
-#  Terminal gestartet, und dessen Ausgabe ist im Fehlerfall das
-#  Wertvollste, was es gibt.
+# -- 2. Einrichten und starten ----------------------------------------
+#  ${1+"$@"} statt "$@": bash-Fassungen vor 4.4 -- und /bin/sh auf macOS ist
+#  bash 3.2 -- behandeln "$@" bei leerer Argumentliste unter 'set -u' als
+#  unbound variable. Der Start ohne Argumente, also der Normalfall, brach
+#  dort ab.
+#
 #  Der Rueckgabecode wird mit "|| code=$?" eingefangen und nicht ueber ein
 #  "if ...; then" -- nach einem fehlgeschlagenen if ist $? bereits das
 #  Ergebnis des if selbst, also 0. Der echte Code waere verloren, und die
 #  Meldung lautete "Fehlercode 0". Genau das ist beim Testen passiert.
 code=0
-"$VENV_PY" -m archcustomiser "$@" || code=$?
+"$PYTHON" tools/bootstrap.py ${1+"$@"} || code=$?
 
 if [ "$code" -eq 0 ]; then
     exit 0

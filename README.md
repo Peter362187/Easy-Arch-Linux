@@ -192,7 +192,7 @@ Spielen realistisch 25–40 GB und muss auf einem Linux-Dateisystem liegen.
    entpacken. Wer git nutzt, klont stattdessen:
 
    ```bash
-   git clone https://github.com/Peter362187/ArchCustomiser.git
+   git clone https://github.com/Peter362187/Easy-Arch-Linux.git
    ```
 
 2. Im entpackten Ordner **`ArchCustomiser.bat` doppelklicken.**
@@ -221,7 +221,7 @@ erneut doppelklicken. Damit wird die Einrichtung von vorn gemacht.
 ### Linux und macOS — der einfache Weg
 
 ```bash
-git clone https://github.com/Peter362187/ArchCustomiser.git && cd ArchCustomiser
+git clone https://github.com/Peter362187/Easy-Arch-Linux.git && cd Easy-Arch-Linux
 ```
 
 ```bash
@@ -250,7 +250,7 @@ python -m venv .venv && .venv/bin/pip install -e ".[dev]"
 Alternativ ohne Quellordner, direkt aus dem Repository:
 
 ```bash
-pipx install git+https://github.com/Peter362187/ArchCustomiser.git
+pipx install git+https://github.com/Peter362187/Easy-Arch-Linux.git
 ```
 
 Danach startet `archcustomiser` die Oberfläche.

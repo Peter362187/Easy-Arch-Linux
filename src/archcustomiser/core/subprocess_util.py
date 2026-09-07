@@ -29,7 +29,7 @@ import os
 import subprocess
 from typing import Any
 
-__all__ = ["windows_flags", "run", "popen"]
+__all__ = ["popen", "run", "windows_flags"]
 
 
 def windows_flags() -> dict[str, Any]:

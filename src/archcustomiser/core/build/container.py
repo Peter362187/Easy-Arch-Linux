@@ -36,8 +36,8 @@ import re
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Sequence
 
 from ..subprocess_util import windows_flags
 

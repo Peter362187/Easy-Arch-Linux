@@ -16,7 +16,6 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
     QDialogButtonBox,
-    QHBoxLayout,
     QLabel,
     QTreeWidget,
     QTreeWidgetItem,

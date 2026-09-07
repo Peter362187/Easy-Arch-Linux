@@ -12,7 +12,7 @@ archinstall-Konfiguration -- damit auch das installierte System Steam findet.
 
 from __future__ import annotations
 
-from typing import Sequence
+from collections.abc import Sequence
 
 HEADER = """#
 # Erzeugt von ArchCustomiser -- nicht von Hand bearbeiten.

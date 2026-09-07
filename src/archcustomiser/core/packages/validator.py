@@ -13,7 +13,7 @@ den Benutzer dazu bringt, einen korrekten Namen zu loeschen.
 from __future__ import annotations
 
 import logging
-from typing import Iterable, Sequence
+from collections.abc import Iterable, Sequence
 
 from .index import RepoIndex
 from .models import BackendProblem, EntryKind, IndexMetadata, Resolution, ValidationReport

@@ -38,8 +38,8 @@ from __future__ import annotations
 import io
 import logging
 import tarfile
-from datetime import datetime, timezone
-from typing import Iterator
+from collections.abc import Iterator
+from datetime import UTC, datetime
 
 from .errors import RepositoryDataError
 from .models import PackageInfo, Provide
@@ -102,7 +102,7 @@ def _int_or_none(fields: dict[str, list[str]], key: str) -> int | None:
 def _date_or_none(fields: dict[str, list[str]], key: str) -> datetime | None:
     raw = _first(fields, key)
     try:
-        return datetime.fromtimestamp(int(raw), tz=timezone.utc)
+        return datetime.fromtimestamp(int(raw), tz=UTC)
     except (TypeError, ValueError, OSError, OverflowError):
         return None
 

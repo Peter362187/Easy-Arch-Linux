@@ -15,7 +15,6 @@ import yaml
 from archcustomiser.core.catalog import CatalogError, PageType, SelectionMode, load_catalog
 from archcustomiser.core.catalog.predicate import parse
 
-
 # ---------------------------------------------------------------------------
 # Der mitgelieferte Katalog
 # ---------------------------------------------------------------------------

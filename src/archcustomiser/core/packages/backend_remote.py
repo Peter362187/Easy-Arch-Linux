@@ -12,8 +12,9 @@ keinen einzigen Netzzugriff mehr.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
+from datetime import UTC
 from pathlib import Path
-from typing import Sequence
 
 from .backend import (
     CancelCallback,
@@ -238,11 +239,11 @@ class RemoteIndexBackend:
             raise
 
     def _age(self, entry: CacheEntry) -> float | None:
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         if entry.fetched_at is None:
             return None
-        return (datetime.now(timezone.utc) - entry.fetched_at).total_seconds()
+        return (datetime.now(UTC) - entry.fetched_at).total_seconds()
 
     def _download(self, repo: str, cached: CacheEntry | None) -> tuple[CacheEntry, bytes]:
         headers: dict[str, str] = {}

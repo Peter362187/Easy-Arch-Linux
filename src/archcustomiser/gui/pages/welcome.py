@@ -22,8 +22,6 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QFileDialog,
     QFrame,
-    QHBoxLayout,
-    QLabel,
     QMessageBox,
     QRadioButton,
     QScrollArea,
@@ -72,7 +70,7 @@ class _Choice(QFrame):
         if description:
             layout.addWidget(HintLabel(description))
 
-    def mousePressEvent(self, event) -> None:      # noqa: N802 -- Qt
+    def mousePressEvent(self, event) -> None:
         # Die ganze Karte anklickbar machen, nicht nur den kleinen Knopf.
         self.button.setChecked(True)
         super().mousePressEvent(event)

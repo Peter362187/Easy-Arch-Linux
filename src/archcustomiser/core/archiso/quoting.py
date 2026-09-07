@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import re
 import shlex
-from typing import Iterable, Mapping
+from collections.abc import Iterable, Mapping
 
 from .errors import UnsafeValueError
 

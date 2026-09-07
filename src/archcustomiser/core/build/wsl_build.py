@@ -27,9 +27,9 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 from ..archiso import TarSink
+from ..archiso.quoting import shell_quote
 from ..archiso.tree import ProfileTree
 from .wsl import WslError, WslTarget
-from ..archiso.quoting import shell_quote
 
 log = logging.getLogger(__name__)
 

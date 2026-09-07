@@ -9,8 +9,6 @@ beim Weg ueber ein Windows-Laufwerk.
 
 from __future__ import annotations
 
-import io
-import tarfile
 from pathlib import Path, PurePosixPath
 
 import pytest
@@ -18,7 +16,6 @@ import pytest
 from archcustomiser.core.archiso.tree import ProfileTree
 from archcustomiser.core.build import wsl
 from archcustomiser.core.build.targets import LocalTarget, WslExecutionTarget
-
 
 # ---------------------------------------------------------------------------
 # Kodierung
@@ -37,7 +34,7 @@ def test_management_output_is_utf16() -> None:
 
 def test_management_output_falls_back_to_utf8() -> None:
     """Falls Microsoft das eines Tages aendert."""
-    assert wsl._decode_management("Hallo Welt".encode("utf-8")) == "Hallo Welt"
+    assert wsl._decode_management(b"Hallo Welt") == "Hallo Welt"
 
 
 def test_empty_output() -> None:
@@ -523,7 +520,7 @@ def test_linux_iso_path_is_never_mangled_by_pathlib() -> None:
     meldete "cannot stat". Die ISO war fertig gebaut, nur nicht mehr
     auffindbar.
     """
-    from archcustomiser.core.build.runner import BuildResult, MkarchisoRunner
+    from archcustomiser.core.build.runner import BuildResult
 
     fake = FakeWsl()
     fake.responses = {

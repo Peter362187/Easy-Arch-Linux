@@ -24,7 +24,7 @@ import tempfile
 import time
 from dataclasses import dataclass
 from dataclasses import replace as _replace
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -58,7 +58,7 @@ class CacheEntry:
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _iso(moment: datetime | None) -> str | None:
@@ -72,7 +72,7 @@ def _parse_iso(raw: Any) -> datetime | None:
         parsed = datetime.fromisoformat(raw)
     except ValueError:
         return None
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
 class CacheLock:
@@ -82,7 +82,7 @@ class CacheLock:
         self.path = path
         self._acquired = False
 
-    def __enter__(self) -> "CacheLock":
+    def __enter__(self) -> CacheLock:
         try:
             ensure_dir(self.path.parent)
         except OSError as exc:

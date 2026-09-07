@@ -12,7 +12,8 @@ die Signale, und ``core`` soll ohne Qt importierbar und testbar bleiben.
 from __future__ import annotations
 
 import logging
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any
 
 from PySide6.QtCore import QObject, Signal
 
@@ -35,7 +36,7 @@ class StoreContext:
 
     __slots__ = ("store",)
 
-    def __init__(self, store: "SelectionStore") -> None:
+    def __init__(self, store: SelectionStore) -> None:
         self.store = store
 
     def is_selected(self, ref: str) -> bool:

@@ -19,7 +19,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QThread, QTimer, Signal
 
 from ..core.archiso.errors import ProfileError
-from ..core.build import BuildController, BuildOutcome, Step
+from ..core.build import BuildController
 from ..core.build.errors import BuildCancelled, BuildError
 from ..core.catalog import Catalog
 from ..core.config import BuildConfig

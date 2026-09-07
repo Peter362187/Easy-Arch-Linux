@@ -7,7 +7,7 @@ bestimmt ueber ``page_type``, welcher davon zum Zug kommt.
 from __future__ import annotations
 
 import logging
-from typing import Callable
+from collections.abc import Callable
 
 from PySide6.QtWidgets import QWizardPage
 

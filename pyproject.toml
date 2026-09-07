@@ -6,6 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "archcustomiser"
 version = "0.4.0"
 description = "Grafischer Builder für individuelle, auf Arch Linux basierende Live-ISOs"
+readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "PySide6>=6.10",
@@ -17,7 +18,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "pytest-qt>=4.4"]
+dev = ["pytest>=8.0", "pytest-qt>=4.4", "ruff>=0.6", "mypy>=1.11"]
 
 [project.gui-scripts]
 archcustomiser = "archcustomiser.__main__:main"
@@ -46,3 +47,64 @@ markers = [
     "linux_only: läuft nur auf Arch/Linux",
     "slow: braucht mehrere Sekunden (Abbruch- und Zeitverhalten)",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Linter und Typpruefung
+#
+# Der Code benutzte seit jeher ruff-Codes (# noqa: BLE001) und
+# type-ignore-Kommentare, und .gitignore kennt .ruff_cache und .mypy_cache --
+# eine Konfiguration gab es aber nirgends. Damit war nicht festgeschrieben,
+# was eigentlich gilt.
+# ---------------------------------------------------------------------------
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests", "tools"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle
+    "F",    # pyflakes -- ungenutzte Importe und Namen
+    "I",    # Import-Reihenfolge
+    "UP",   # veraltete Schreibweisen
+    "B",    # haeufige Fallen (bugbear)
+    "C4",   # Comprehensions
+    "RUF",  # ruff-eigene Regeln
+]
+ignore = [
+    "E501",    # Zeilenlaenge: die Kommentare hier erklaeren, sie fuellen nicht
+    "B008",    # Aufruf im Vorgabewert -- bei Qt-Signaturen ueblich
+    "RUF001",  # Umlaute und Gedankenstriche in Zeichenketten sind Absicht
+    "RUF002",
+    "RUF003",
+    "RUF012",  # veraenderliche Klassenattribute ohne ClassVar
+    # Die folgenden sind Geschmacksfragen, bei denen das Projekt eine bewusste
+    # Entscheidung getroffen hat:
+    "UP042",   # str+Enum ist Absicht: die Werte stehen so im YAML-Katalog
+    "RUF005",  # Verkettung liest sich in den Meldungstexten besser
+    "RUF015",  # [0] statt next(...) ist an diesen Stellen klarer
+    "B007",    # ungenutzte Schleifenvariable -- meist ein sprechender Name
+    "B905",    # zip ohne strict: die Laengen sind an Ort und Stelle belegt
+    "C409",    # tuple(list) bleibt lesbarer als ein verschachteltes Literal
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests duerfen ungenutzte Importe in Fixtures haben und lange Vergleiche.
+"tests/*" = ["B011", "B017"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src/archcustomiser"]
+ignore_missing_imports = true
+warn_unused_configs = true
+# Schrittweise: der Kern ist streng, die Oberflaeche folgt mit dem Neubau.
+check_untyped_defs = true
+
+[[tool.mypy.overrides]]
+# Die Oberflaeche wird gerade neu gebaut; bis dahin waeren ihre Befunde nur
+# Rauschen ueber Code, der ohnehin verschwindet. Der Kern ist streng geprueft.
+module = "archcustomiser.gui.*"
+check_untyped_defs = false
+ignore_errors = true

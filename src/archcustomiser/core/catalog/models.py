@@ -10,9 +10,10 @@ Worker-Threads gemeinsam gelesen und darf sich nie aendern.
 
 from __future__ import annotations
 
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Iterator, Literal, Mapping
+from typing import Any, Literal
 
 from .predicate import ALWAYS, Predicate
 

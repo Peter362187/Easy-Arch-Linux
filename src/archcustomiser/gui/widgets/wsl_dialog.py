@@ -20,11 +20,11 @@ import logging
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QComboBox,
-    QMessageBox,
     QDialog,
     QDialogButtonBox,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QVBoxLayout,
@@ -263,8 +263,8 @@ class WslSetupDialog(QDialog):
         self._add_step(
             0,
             "Bereit",
-            f"Arch Linux ist in WSL vorhanden. Der Bau läuft dort und die fertige "
-            f"ISO landet anschließend wieder in deinem Windows-Ordner.",
+            "Arch Linux ist in WSL vorhanden. Der Bau läuft dort und die fertige "
+            "ISO landet anschließend wieder in deinem Windows-Ordner.",
             "",
         )
         for distribution in arch:

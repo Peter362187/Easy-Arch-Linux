@@ -48,7 +48,7 @@ VALIDATION_DELAY_MS = 250
 class _FieldRow:
     """Ein Feld samt Eingabewidget und Meldungszeile."""
 
-    __slots__ = ("spec", "widget", "message", "label", "container", "browse")
+    __slots__ = ("browse", "container", "label", "message", "spec", "widget")
 
     def __init__(
         self,

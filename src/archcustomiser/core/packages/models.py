@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from enum import Enum, auto
 
 
@@ -82,8 +82,8 @@ class IndexMetadata:
         if reference is None:
             return None
         if reference.tzinfo is None:
-            reference = reference.replace(tzinfo=timezone.utc)
-        return datetime.now(timezone.utc) - reference
+            reference = reference.replace(tzinfo=UTC)
+        return datetime.now(UTC) - reference
 
     @property
     def package_count(self) -> int:

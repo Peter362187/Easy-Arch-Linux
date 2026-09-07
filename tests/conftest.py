@@ -8,18 +8,17 @@ tatsaechlich kein Prozess gestartet und keine Verbindung geoeffnet wurde.
 
 from __future__ import annotations
 
-import gzip
 import io
 import tarfile
-from datetime import datetime, timezone
+from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 import pytest
 
 from archcustomiser.core.packages.runner import CommandResult
 from archcustomiser.core.packages.transport import HttpResponse
-
 
 # ---------------------------------------------------------------------------
 # Echte ALPM-Datenbanken erzeugen
@@ -87,8 +86,8 @@ def sample_index(sample_db_bytes: bytes):
             RepoMeta(
                 name="extra",
                 source="test",
-                fetched_at=datetime.now(timezone.utc),
-                last_modified=datetime.now(timezone.utc),
+                fetched_at=datetime.now(UTC),
+                last_modified=datetime.now(UTC),
                 package_count=len(packages),
             ),
         ),

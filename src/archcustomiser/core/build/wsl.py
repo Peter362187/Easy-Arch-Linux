@@ -27,12 +27,11 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 import shutil
 import subprocess
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Callable, Sequence
 
 from ..subprocess_util import run as run_ohne_fenster
 from .errors import BuildError

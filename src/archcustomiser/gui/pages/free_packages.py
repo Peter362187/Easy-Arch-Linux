@@ -23,12 +23,11 @@ from PySide6.QtWidgets import (
     QPushButton,
     QTreeWidget,
     QTreeWidgetItem,
-    QVBoxLayout,
 )
 
 from ...core.catalog import Category
-from ...core.resolver import Issue
 from ...core.packages import EntryKind, parse_list
+from ...core.resolver import Issue
 from .. import theme
 from ..packages_worker import PackageController
 from ..store import SelectionStore

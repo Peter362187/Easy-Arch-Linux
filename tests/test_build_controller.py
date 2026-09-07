@@ -245,10 +245,10 @@ def test_preflight_collects_every_finding(tmp_path) -> None:
 def _umgebung_ohne(*fehlende: str):
     """Eine Linux-Umgebung, in der bestimmte Werkzeuge fehlen."""
     from archcustomiser.core.environment import (
-        CONDITIONAL_TOOLS,
-        Environment,
         _OPTIONAL_TOOLS,
         _REQUIRED_TOOLS,
+        CONDITIONAL_TOOLS,
+        Environment,
         Tool,
     )
 
