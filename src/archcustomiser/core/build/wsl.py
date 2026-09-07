@@ -34,6 +34,7 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Callable, Sequence
 
+from ..subprocess_util import run as run_ohne_fenster
 from .errors import BuildError
 
 log = logging.getLogger(__name__)
@@ -182,12 +183,36 @@ def _decode_management(data: bytes) -> str:
     if data[:2] in (b"\xff\xfe", b"\xfe\xff"):
         return data.decode("utf-16", errors="replace").replace("\ufeff", "")
 
-    if data.count(0) > len(data) // 4:
+    # In UTF-16-LE traegt nur ein Zeichen unter U+0100 ein Nullbyte. Eine
+    # japanische Meldung (Katakana) kommt damit unter jede feste Quote --
+    # die frueher hier stehende Schwelle von einem Viertel griff dort nicht,
+    # und der Text wurde als UTF-8 zu Zeichensalat. UTF-8 enthaelt dagegen
+    # *kein einziges* Nullbyte: eines genuegt als Verdacht. Bestaetigt wird
+    # er ueber die Plausibilitaet des Ergebnisses.
+    if data.count(0) and len(data) % 2 == 0:
         try:
-            return data.decode("utf-16-le").replace("\ufeff", "")
+            kandidat = data.decode("utf-16-le").replace("\ufeff", "")
         except UnicodeDecodeError:
-            pass
+            kandidat = None
+        if kandidat is not None and _lesbar(kandidat):
+            return kandidat
     return data.decode("utf-8", errors="replace")
+
+
+def _lesbar(text: str) -> bool:
+    """Ob ein dekodierter Text wie eine Meldung aussieht.
+
+    Reiner ASCII-Text in UTF-8 laesst sich ebenfalls als UTF-16 dekodieren,
+    nur eben zu Unsinn. Der Unterschied: echte Meldungen enthalten ausser
+    Zeilenumbruch und Tabulator keine Steuerzeichen und kein Ersatzzeichen.
+    """
+    if not text:
+        return False
+    erlaubt = (chr(13), chr(10), chr(9))
+    return not any(
+        zeichen == "\ufffd" or (zeichen < " " and zeichen not in erlaubt)
+        for zeichen in text
+    )
 
 
 def _run_management(arguments: Sequence[str], timeout: float = DEFAULT_TIMEOUT):
@@ -195,12 +220,10 @@ def _run_management(arguments: Sequence[str], timeout: float = DEFAULT_TIMEOUT):
     if executable is None:
         raise WslNotAvailable("wsl.exe nicht gefunden")
     try:
-        completed = subprocess.run(
+        completed = run_ohne_fenster(
             [executable, *arguments],
             capture_output=True,
             timeout=timeout,
-            check=False,
-            shell=False,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise WslNotAvailable(f"{executable}: {exc}") from exc
@@ -353,19 +376,22 @@ class WslTarget:
         als die Meldungen von wsl.exe selbst.
         """
         try:
-            completed = subprocess.run(
+            completed = run_ohne_fenster(
                 self.wrap(argv, as_root=as_root),
                 capture_output=True,
                 timeout=timeout,
-                check=False,
-                shell=False,
             )
         except (OSError, subprocess.SubprocessError) as exc:
             raise WslError(f"Der Aufruf in WSL ist fehlgeschlagen: {exc}") from exc
+        # stdout kommt vom Linux-Programm und ist UTF-8. stderr kann von
+        # beiden stammen: vom Programm (UTF-8) oder von wsl.exe selbst, wenn
+        # der Aufruf gar nicht zustande kam -- und dessen Meldungen sind
+        # UTF-16-LE. Ohne die Unterscheidung landete "Es gibt keine Verteilung
+        # mit dem angegebenen Namen." mit Nullbytes im Fehlerdialog.
         return WslResult(
             returncode=completed.returncode,
             stdout=completed.stdout.decode("utf-8", errors="replace"),
-            stderr=completed.stderr.decode("utf-8", errors="replace"),
+            stderr=_decode_management(completed.stderr),
         )
 
     # -- Pfade ----------------------------------------------------------------

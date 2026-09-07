@@ -570,3 +570,102 @@ def test_cleanup_removes_the_iso_once_it_is_on_windows() -> None:
     cleanup(fake, paths, remove_output=True)
     entfernt = [" ".join(c) for c in fake.calls if c[0] == "rm"]
     assert any("/root/x/out" in c for c in entfernt)
+
+
+# ---------------------------------------------------------------------------
+# Kein Konsolenfenster, keine geerbte Eingabe
+# ---------------------------------------------------------------------------
+
+
+def test_wsl_calls_hide_the_console_window(monkeypatch) -> None:
+    """Unter pythonw.exe legt Windows fuer jedes Konsolenprogramm ein Fenster an.
+
+    Auch mit capture_output: die Umleitung betrifft die Datenstroeme, nicht
+    das Fenster. Waehrend eines Abbruchs laufen pgrep und pkill im
+    Halbsekundentakt -- dort flackerte es, bis der Bau stand, und stahl dabei
+    den Fokus.
+    """
+    import subprocess as sp
+
+    from archcustomiser.core import subprocess_util
+
+    gesehen: dict[str, object] = {}
+
+    def merken(argv, **kwargs):
+        gesehen.update(kwargs)
+        gesehen["argv"] = argv
+        return sp.CompletedProcess(argv, 0, b"", b"")
+
+    monkeypatch.setattr(subprocess_util.os, "name", "nt")
+    monkeypatch.setattr(subprocess_util.subprocess, "run", merken)
+    monkeypatch.setattr(wsl, "wsl_executable", lambda: "wsl.exe")
+
+    wsl.WslTarget("archlinux").run(["true"])
+
+    flagge = getattr(sp, "CREATE_NO_WINDOW", 0x08000000)
+    assert gesehen.get("creationflags", 0) & flagge, "das Fenster blitzt weiterhin auf"
+
+
+def test_wsl_calls_never_inherit_stdin(monkeypatch) -> None:
+    """Ein nachfragendes Programm haengt sonst bis zum Zeitlimit.
+
+    'pacman -Syu archiso' laeuft mit 900 Sekunden Frist und ohne
+    Abbrechen-Knopf. Fragt es nach einem Schluesselbund, wartete es ohne EOF
+    die vollen fuenfzehn Minuten.
+    """
+    import subprocess as sp
+
+    from archcustomiser.core import subprocess_util
+
+    gesehen: dict[str, object] = {}
+
+    def merken(argv, **kwargs):
+        gesehen.update(kwargs)
+        return sp.CompletedProcess(argv, 0, b"", b"")
+
+    monkeypatch.setattr(subprocess_util.subprocess, "run", merken)
+    monkeypatch.setattr(wsl, "wsl_executable", lambda: "wsl.exe")
+
+    wsl.WslTarget("archlinux").run(["true"])
+    assert gesehen.get("stdin") is sp.DEVNULL
+
+
+def test_management_errors_survive_utf16(monkeypatch) -> None:
+    """Meldungen von wsl.exe selbst sind UTF-16-LE, auch auf stderr.
+
+    Ohne Unterscheidung landete "Es gibt keine Verteilung mit dem angegebenen
+    Namen." mit Nullbytes im Fehlerdialog.
+    """
+    import subprocess as sp
+
+    from archcustomiser.core import subprocess_util
+
+    meldung = "Es gibt keine Verteilung mit dem angegebenen Namen."
+    monkeypatch.setattr(
+        subprocess_util.subprocess,
+        "run",
+        lambda argv, **k: sp.CompletedProcess(argv, 1, b"", meldung.encode("utf-16-le")),
+    )
+    monkeypatch.setattr(wsl, "wsl_executable", lambda: "wsl.exe")
+
+    ergebnis = wsl.WslTarget("gibtsnicht").run(["true"])
+    assert ergebnis.stderr.strip() == meldung
+    assert chr(0) not in ergebnis.stderr
+
+
+def test_utf16_detection_survives_non_latin_messages() -> None:
+    """Auf japanischem Windows griff die Nullbyte-Quote nicht.
+
+    In UTF-16-LE traegt nur ein Zeichen unter U+0100 ein Nullbyte; Katakana
+    also keines. Die frueher verlangten 25 Prozent kamen damit nie zustande,
+    und die Meldung wurde als UTF-8 zu Zeichensalat.
+    """
+    japanisch = "Linux 用 Windows サブシステムがインストールされていません。"
+    assert wsl._decode_management(japanisch.encode("utf-16-le")) == japanisch
+
+    russisch = "Подсистема Windows для Linux не установлена."
+    assert wsl._decode_management(russisch.encode("utf-16-le")) == russisch
+
+    # Der umgekehrte Fall muss weiterhin stimmen: UTF-8 bleibt UTF-8.
+    deutsch = "Die Verteilung wurde nicht gefunden."
+    assert wsl._decode_management(deutsch.encode("utf-8")) == deutsch

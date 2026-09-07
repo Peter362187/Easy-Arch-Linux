@@ -528,16 +528,36 @@ def run_container_preflight(
     # Ehrlich benennen statt verstecken: der Container laeuft privilegiert, weil
     # pacstrap acht Dateisysteme einhaengt. Rootless scheitert an devtmpfs, das
     # im Kernel kein FS_USERNS_MOUNT-Flag hat.
-    report.checks.append(
-        Check(
-            "Rechte",
-            True,
-            "Der Container laeuft privilegiert (--privileged). Das braucht "
-            "pacstrap, um die Paketdatenbank im Abbild aufzubauen; Arch baut "
-            "seine eigenen ISOs genauso.",
-            fatal=False,
+    rootless = bool(getattr(container, "rootless", False))
+    if rootless:
+        # Erkannt wurde das schon immer, gesagt wurde es nie: der Benutzer lief
+        # ungewarnt in einen Fehlschlag, der erst nach Minuten kommt. Eine
+        # Warnung, keine Sperre -- ob die Kernelgrenze im Einzelfall doch
+        # traegt, entscheidet nicht diese Pruefung, sondern der Versuch.
+        report.checks.append(
+            Check(
+                "Rechte",
+                False,
+                "Die Container-Engine laeuft im rootless-Modus. pacstrap haengt "
+                "acht Dateisysteme in den Zielbaum ein, darunter devtmpfs -- "
+                "und das laesst sich in einem User-Namespace grundsaetzlich "
+                "nicht einhaengen. Der Bau kann daran scheitern. Abhilfe: die "
+                "Engine als root ansprechen (podman: 'sudo podman', docker: "
+                "Dienst im Systemkontext).",
+                fatal=False,
+            )
         )
-    )
+    else:
+        report.checks.append(
+            Check(
+                "Rechte",
+                True,
+                "Der Container laeuft privilegiert (--privileged). Das braucht "
+                "pacstrap, um die Paketdatenbank im Abbild aufzubauen; Arch baut "
+                "seine eigenen ISOs genauso.",
+                fatal=False,
+            )
+        )
 
     # -- Host-Fakten: Platz, Dateisystem, Schreibrechte -----------------------
     _check_space(report, work_dir, needed)

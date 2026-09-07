@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import subprocess
 import threading
 import time
@@ -31,11 +32,18 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
+from ..subprocess_util import popen as popen_ohne_fenster
 from .errors import BuildCancelled, BuildFailed
 from .progress import ProgressParser, ProgressState, summarise_failure
 from .targets import ExecutionTarget, LocalTarget
 
 log = logging.getLogger(__name__)
+
+# Trennt an Wagenruecklauf UND Zeilenumbruch -- mksquashfs und xorriso
+# schreiben ihren Fortschritt ohne Zeilenumbruch.
+_NEWLINE = bytes([10])
+_RETURN = bytes([13])
+_TRENNER = re.compile(b"[" + _RETURN + _NEWLINE + b"]")
 
 READ_SIZE = 4096
 TERMINATE_GRACE_SECONDS = 8.0
@@ -194,13 +202,12 @@ class MkarchisoRunner:
             if self._cancelled.is_set():
                 raise BuildCancelled()
             try:
-                process = subprocess.Popen(
+                process = popen_ohne_fenster(
                     argv,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,   # Reihenfolge bleibt so erhalten
                     stdin=subprocess.DEVNULL,   # mkarchiso darf nichts erfragen
                     bufsize=0,
-                    shell=False,
                     env=self.environment(),
                     cwd=self.target.cwd(),
                 )
@@ -327,13 +334,16 @@ def _take_complete(buffer: bytes) -> tuple[bytes, list[bytes]]:
     Getrennt wird an ``\\r`` und ``\\n``. Der Rest bleibt im Puffer, bis das
     naechste Stueck kommt -- sonst wuerde eine in der Mitte zerschnittene
     Zeile zweimal auftauchen.
+
+    Gesucht wird mit ``rfind`` statt mit einer Python-Schleife ueber jedes
+    einzelne Byte. Der Unterschied faellt erst auf, wenn ein Werkzeug laenger
+    ohne Zeilenende schreibt: der Puffer waechst dann bis zur Obergrenze von
+    einem Megabyte, und jedes gelesene 4-KB-Stueck durchlief ihn vorher
+    vollstaendig -- in Summe eine Viertelmilliarde Schleifendurchlaeufe,
+    waehrend die Pipe des Bauprozesses volllaeuft.
     """
-    parts: list[bytes] = []
-    start = 0
-    for index, byte in enumerate(buffer):
-        if byte in (0x0A, 0x0D):
-            piece = buffer[start:index]
-            if piece:
-                parts.append(piece)
-            start = index + 1
-    return buffer[start:], parts
+    ende = max(buffer.rfind(_NEWLINE), buffer.rfind(_RETURN))
+    if ende < 0:
+        return buffer, []
+    fertig = buffer[: ende + 1]
+    return buffer[ende + 1 :], [teil for teil in _TRENNER.split(fertig) if teil]

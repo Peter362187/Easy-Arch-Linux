@@ -862,6 +862,25 @@ class ContainerExecutionTarget:
     def deliver_profile(
         self, tree, paths: BuildPaths, *, iso_name: str, on_progress=None
     ) -> None:
+        """Profil ablegen -- und vorher das Abbild sicherstellen.
+
+        Die Vorabpruefung kuendigt an, das Abbild werde "beim ersten Mal
+        erzeugt". Gerufen hat ``ensure_image()`` bisher niemand: auf einem
+        Rechner ohne das lokale Abbild scheiterte der erste Bau sofort beim
+        ``run``, mit einer Meldung ueber ein fehlendes Abbild statt des
+        angekuendigten Baus.
+
+        Hier und nicht in ``prepare()``: der Abbildbau laedt einige hundert MB
+        und dauert Minuten. Er gehoert damit in den Schritt, der ohnehin
+        Fortschritt meldet.
+        """
+        if on_progress is not None:
+            on_progress(0.05, "Container-Abbild wird geprueft")
+        self.container.ensure_image(
+            on_line=lambda text: (
+                on_progress(0.5, text) if on_progress is not None else None
+            )
+        )
         # Woertlich der lokale Fall: das Verzeichnis ist ueber den Mount dasselbe.
         LocalTarget().deliver_profile(
             tree, paths, iso_name=iso_name, on_progress=on_progress
@@ -1037,10 +1056,14 @@ def _probe_container() -> TargetOption:
 
     if status.usable and status.engine:
         zusatz = "" if status.image_ready else " Das Abbild wird beim ersten Mal erzeugt."
+        ziel = ContainerTarget(status.engine)
+        # Damit die Vorabpruefung warnen kann, statt den Benutzer nach Minuten
+        # in einen Fehlschlag laufen zu lassen (devtmpfs im User-Namespace).
+        ziel.rootless = status.rootless
         return TargetOption(
             "container",
             f"In einem Container mit {status.engine}.{zusatz}",
-            target=ContainerExecutionTarget(ContainerTarget(status.engine)),
+            target=ContainerExecutionTarget(ziel),
         )
     return TargetOption(
         "container",
