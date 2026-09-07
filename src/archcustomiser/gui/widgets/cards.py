@@ -134,24 +134,24 @@ class OptionCard(QWidget):
         return chr(10).join(teile)
 
     # -- Ereignisse -----------------------------------------------------------
-    def enterEvent(self, event) -> None:  # noqa: N802 -- Qt
+    def enterEvent(self, event) -> None:
         motion.animate(
             self, von=self._hover, bis=1.0, dauer=motion.SCHNELL, setzen=self._setze_hover
         )
         super().enterEvent(event)
 
-    def leaveEvent(self, event) -> None:  # noqa: N802 -- Qt
+    def leaveEvent(self, event) -> None:
         motion.animate(
             self, von=self._hover, bis=0.0, dauer=motion.SCHNELL, setzen=self._setze_hover
         )
         super().leaveEvent(event)
 
-    def mousePressEvent(self, event) -> None:  # noqa: N802 -- Qt
+    def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self._umschalten()
         super().mousePressEvent(event)
 
-    def keyPressEvent(self, event) -> None:  # noqa: N802 -- Qt
+    def keyPressEvent(self, event) -> None:
         if event.key() in (Qt.Key.Key_Space, Qt.Key.Key_Return, Qt.Key.Key_Enter):
             self._umschalten()
             event.accept()
@@ -186,7 +186,7 @@ class OptionCard(QWidget):
         return self.sizeHint()
 
     # -- Zeichnen -------------------------------------------------------------
-    def paintEvent(self, event) -> None:  # noqa: N802 -- Qt
+    def paintEvent(self, event) -> None:
         werte = tokens()
         p = werte.palette
         maler = QPainter(self)
@@ -209,13 +209,9 @@ class OptionCard(QWidget):
         maler.end()
 
     def _zeichne_grund(self, maler, flaeche, radius, p) -> None:
-        if self._auto:
-            grund = QColor(p.accent_soft.replace("rgba", "rgba"))
-            maler.setBrush(QColor(p.surface_alt))
-        elif not self._verfuegbar:
-            maler.setBrush(QColor(p.surface))
-        else:
-            maler.setBrush(QColor(p.surface))
+        # Automatisch ergaenzte Karten sitzen auf einem abgesetzten Grund;
+        # der Akzentschleier darueber kommt weiter unten.
+        maler.setBrush(QColor(p.surface_alt if self._auto else p.surface))
         maler.setPen(Qt.PenStyle.NoPen)
         maler.drawRoundedRect(flaeche, radius, radius)
 

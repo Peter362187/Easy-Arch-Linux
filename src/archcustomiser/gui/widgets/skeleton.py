@@ -37,16 +37,16 @@ class SkeletonRows(QWidget):
         self._phase = (self._phase + 0.02) % 1.0
         self.update()
 
-    def showEvent(self, event) -> None:  # noqa: N802 -- Qt
+    def showEvent(self, event) -> None:
         super().showEvent(event)
         if not motion.is_reduced():
             self._takt.start()
 
-    def hideEvent(self, event) -> None:  # noqa: N802 -- Qt
+    def hideEvent(self, event) -> None:
         self._takt.stop()
         super().hideEvent(event)
 
-    def paintEvent(self, event) -> None:  # noqa: N802 -- Qt
+    def paintEvent(self, event) -> None:
         werte = tokens()
         p = werte.palette
         maler = QPainter(self)

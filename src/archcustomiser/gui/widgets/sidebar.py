@@ -94,7 +94,7 @@ class StepSidebar(QWidget):
         metrik = QFontMetricsF(schrift(CAPTION))
         return werte.space.xl + metrik.height() + werte.space.lg + 8
 
-    def mouseMoveEvent(self, event) -> None:  # noqa: N802 -- Qt
+    def mouseMoveEvent(self, event) -> None:
         step_id = self._schritt_bei(event.position().y())
         if step_id not in self._anklickbar:
             step_id = ""
@@ -106,19 +106,19 @@ class StepSidebar(QWidget):
             self.update()
         super().mouseMoveEvent(event)
 
-    def leaveEvent(self, event) -> None:  # noqa: N802 -- Qt
+    def leaveEvent(self, event) -> None:
         self._unter_maus = ""
         self.update()
         super().leaveEvent(event)
 
-    def mousePressEvent(self, event) -> None:  # noqa: N802 -- Qt
+    def mousePressEvent(self, event) -> None:
         step_id = self._schritt_bei(event.position().y())
         if step_id and step_id in self._anklickbar:
             self.stepClicked.emit(step_id)
         super().mousePressEvent(event)
 
     # -- Zeichnen -------------------------------------------------------------
-    def paintEvent(self, event) -> None:  # noqa: N802 -- Qt
+    def paintEvent(self, event) -> None:
         werte = tokens()
         p = werte.palette
         maler = QPainter(self)
@@ -300,7 +300,7 @@ class Kopfzeile(QWidget):
             hoehe += QFontMetricsF(schrift(CAPTION)).height() * 2 + werte.space.xs
         self.setFixedHeight(int(hoehe + werte.space.sm))
 
-    def paintEvent(self, event) -> None:  # noqa: N802 -- Qt
+    def paintEvent(self, event) -> None:
         werte = tokens()
         p = werte.palette
         maler = QPainter(self)

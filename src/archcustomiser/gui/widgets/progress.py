@@ -56,7 +56,7 @@ class SmoothProgressBar(QWidget):
         self._wert = float(wert)
         self.update()
 
-    def paintEvent(self, event) -> None:  # noqa: N802 -- Qt
+    def paintEvent(self, event) -> None:
         p = tokens().palette
         maler = QPainter(self)
         maler.setRenderHint(QPainter.RenderHint.Antialiasing, True)

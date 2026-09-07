@@ -29,8 +29,8 @@ from ...core.catalog import Category, Option, SelectionMode
 from ...core.config import SelectionSource
 from .. import theme
 from ..store import SelectionStore
-from ..widgets.common import SearchField
 from ..widgets.option_widget import OptionWidget
+from ..widgets.search import SearchField
 from .base import CatalogPageBase
 
 log = logging.getLogger(__name__)

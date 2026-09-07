@@ -54,12 +54,12 @@ class Chip(QWidget):
         self._aktiv = wert
         self.update()
 
-    def mousePressEvent(self, event) -> None:  # noqa: N802 -- Qt
+    def mousePressEvent(self, event) -> None:
         self.setze_aktiv(not self._aktiv)
         self.umgeschaltet.emit(self.kennung, self._aktiv)
         super().mousePressEvent(event)
 
-    def keyPressEvent(self, event) -> None:  # noqa: N802 -- Qt
+    def keyPressEvent(self, event) -> None:
         if event.key() in (Qt.Key.Key_Space, Qt.Key.Key_Return, Qt.Key.Key_Enter):
             self.setze_aktiv(not self._aktiv)
             self.umgeschaltet.emit(self.kennung, self._aktiv)
@@ -67,7 +67,7 @@ class Chip(QWidget):
             return
         super().keyPressEvent(event)
 
-    def paintEvent(self, event) -> None:  # noqa: N802 -- Qt
+    def paintEvent(self, event) -> None:
         werte = tokens()
         p = werte.palette
         maler = QPainter(self)

@@ -88,16 +88,16 @@ class AnimatedCheck(QWidget):
         elif not soll and self._takt.isActive():
             self._takt.stop()
 
-    def showEvent(self, event) -> None:  # noqa: N802 -- Qt
+    def showEvent(self, event) -> None:
         super().showEvent(event)
         self._takt_pruefen()
 
-    def hideEvent(self, event) -> None:  # noqa: N802 -- Qt
+    def hideEvent(self, event) -> None:
         self._takt.stop()
         super().hideEvent(event)
 
     # -- Zeichnen -------------------------------------------------------------
-    def paintEvent(self, event) -> None:  # noqa: N802 -- Qt
+    def paintEvent(self, event) -> None:
         p = tokens().palette
         maler = QPainter(self)
         maler.setRenderHint(QPainter.RenderHint.Antialiasing, True)
@@ -116,7 +116,7 @@ class AnimatedCheck(QWidget):
             maler.setBrush(Qt.BrushStyle.NoBrush)
             maler.drawEllipse(flaeche)
             maler.setPen(QPen(QColor(farbe), 2.0, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-            maler.drawArc(flaeche, int(-self._winkel * 16), int(100 * 16))
+            maler.drawArc(flaeche, int(-self._winkel * 16), 100 * 16)
             maler.end()
             return
 

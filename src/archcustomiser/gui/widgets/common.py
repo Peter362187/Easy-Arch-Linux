@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from PySide6.QtCore import QTimer, QUrl, Qt
+from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QBrush, QColor, QDesktopServices
 from PySide6.QtWidgets import (
     QApplication,
@@ -197,13 +197,3 @@ class Wertzeile(QWidget):
 
     def setze_wert(self, wert: str) -> None:
         self._wert.setText(wert)
-
-
-# ---------------------------------------------------------------------------
-# Uebergang zur neuen Oberflaeche
-# ---------------------------------------------------------------------------
-
-# Das Suchfeld ist nach ``search.py`` gewandert, wo es zusammen mit den
-# Filterchips steht. Solange die alte Auswahlseite noch existiert, bleibt der
-# Name hier erreichbar -- ein Import, keine zweite Umsetzung.
-from .search import SearchField  # noqa: E402

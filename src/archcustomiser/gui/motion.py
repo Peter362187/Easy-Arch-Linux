@@ -21,7 +21,8 @@ CPU-Last im Leerlauf" ist damit pruefbar und nicht nur behauptet.
 from __future__ import annotations
 
 import os
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from PySide6.QtCore import (
     QAbstractAnimation,
@@ -31,17 +32,17 @@ from PySide6.QtCore import (
 )
 
 __all__ = [
-    "SCHNELL",
-    "NORMAL",
-    "LANGSAM",
-    "INTRO",
     "ERFOLG",
-    "duration",
-    "animate",
-    "run",
+    "INTRO",
+    "LANGSAM",
+    "NORMAL",
+    "SCHNELL",
     "active_count",
-    "set_reduced",
+    "animate",
+    "duration",
     "is_reduced",
+    "run",
+    "set_reduced",
 ]
 
 # Dauern in Millisekunden. Alles unter 300 ms wirkt als Reaktion, alles

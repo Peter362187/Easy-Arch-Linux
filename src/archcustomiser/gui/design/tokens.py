@@ -97,8 +97,12 @@ def heller(farbe: str, anteil: float) -> str:
     Ueber HSL statt ueber die RGB-Kanaele: eine Aufhellung im RGB-Raum
     entsaettigt und laesst Blau grau werden.
     """
-    h, l, s = colorsys.rgb_to_hls(*_rgb(farbe))
-    return _hex(colorsys.hls_to_rgb(h, max(0.0, min(1.0, l + anteil)), s))
+    farbton, helligkeit, saettigung = colorsys.rgb_to_hls(*_rgb(farbe))
+    return _hex(
+        colorsys.hls_to_rgb(
+            farbton, max(0.0, min(1.0, helligkeit + anteil)), saettigung
+        )
+    )
 
 
 def luminanz(farbe: str) -> float:

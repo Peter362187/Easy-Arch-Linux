@@ -25,7 +25,7 @@ from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QApplication, QGraphicsOpacityEffect, QLabel, QWidget
 
 from .. import motion
-from ..settings import THEME_DUNKEL, THEME_HELL, THEME_SYSTEM, Settings
+from ..settings import THEME_DUNKEL, THEME_HELL, Settings
 from .qss import build_stylesheet
 from .tokens import Tokens, tokens_for
 

@@ -23,7 +23,7 @@ from PySide6.QtGui import QColor, QFontMetricsF, QPainter
 from PySide6.QtWidgets import QWidget
 
 from .. import motion
-from ..design import mit_alpha, tokens
+from ..design import tokens
 from ..design.typo import BODY, schrift
 
 ANZEIGEDAUER_MS = 4500
@@ -70,12 +70,12 @@ class Toast(QWidget):
         self._deckkraft = float(wert)
         self.update()
 
-    def mousePressEvent(self, event) -> None:  # noqa: N802 -- Qt
+    def mousePressEvent(self, event) -> None:
         if self._aktion:
             self.angeklickt.emit()
         super().mousePressEvent(event)
 
-    def paintEvent(self, event) -> None:  # noqa: N802 -- Qt
+    def paintEvent(self, event) -> None:
         werte = tokens()
         p = werte.palette
         maler = QPainter(self)
@@ -186,7 +186,7 @@ class ToastHost(QObject):
             toast.move(x, y)
             unten = y - werte.space.sm
 
-    def eventFilter(self, objekt, ereignis) -> bool:  # noqa: N802 -- Qt
+    def eventFilter(self, objekt, ereignis) -> bool:
         if objekt is self._fenster and ereignis.type() == QEvent.Type.Resize:
             self._anordnen()
         return False

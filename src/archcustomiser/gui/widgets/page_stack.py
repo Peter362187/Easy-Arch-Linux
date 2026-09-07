@@ -34,7 +34,7 @@ class _Uebergang(QWidget):
         self._anteil = float(wert)
         self.update()
 
-    def paintEvent(self, event) -> None:  # noqa: N802 -- Qt
+    def paintEvent(self, event) -> None:
         maler = QPainter(self)
         versatz = int(32 * self._richtung)
 
@@ -96,7 +96,7 @@ class AnimatedStack(QStackedWidget):
             fertig=fertig,
         )
 
-    def resizeEvent(self, event) -> None:  # noqa: N802 -- Qt
+    def resizeEvent(self, event) -> None:
         # Ein Uebergang mit falscher Groesse sieht schlimmer aus als keiner.
         self._abbrechen()
         super().resizeEvent(event)

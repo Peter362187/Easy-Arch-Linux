@@ -19,9 +19,9 @@ Regeln an einer Stelle und testbar.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Callable, Iterable
 
 from ..core.catalog import Category
 
@@ -74,7 +74,7 @@ class NavigationModel:
 
     # -- Aufbau ---------------------------------------------------------------
     @classmethod
-    def aus_katalog(cls, kategorien: Iterable[Category]) -> "NavigationModel":
+    def aus_katalog(cls, kategorien: Iterable[Category]) -> NavigationModel:
         schritte = [Step(WELCOME_ID, Art.WELCOME, "Start", "settings")]
         for kategorie in kategorien:
             if not kategorie.visible:
