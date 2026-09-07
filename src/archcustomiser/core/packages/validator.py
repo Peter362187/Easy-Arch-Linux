@@ -130,6 +130,27 @@ def classify(
             ),
         )
 
+    fehlend = getattr(index.meta, "missing_repos", ())
+    if fehlend:
+        # Die zentrale Zusicherung der Schicht: ein Name gilt nur dann als
+        # nicht vorhanden, wenn ein vollstaendiger Index vorliegt. Fiel
+        # bisher ein Repository aus, wurde der Rest trotzdem als vollstaendig
+        # behandelt -- und jedes Paket daraus blockierte den Weiter-Knopf.
+        return Resolution(
+            query=query,
+            normalized=name,
+            kind=EntryKind.UNVERIFIED,
+            constraint=constraint,
+            notes=tuple(
+                notes
+                + [
+                    "Nicht pruefbar: die Paketdaten von "
+                    + ", ".join(fehlend)
+                    + " konnten nicht geladen werden."
+                ]
+            ),
+        )
+
     return Resolution(
         query=query,
         normalized=name,

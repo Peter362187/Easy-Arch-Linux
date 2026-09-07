@@ -46,6 +46,7 @@ ProfileIssueCode = Literal[
     "moved_to_extra",
     "version_mismatch",
     "secret_dropped",
+    "invalid_package",
 ]
 
 
@@ -318,14 +319,53 @@ class ProfileService:
             # Eintraege hinzugefuegt haben (eine entfernte Option, die im
             # Snapshot als Paket auftaucht). Ein Ueberschreiben wuerde genau
             # die Daten verlieren, die gerettet werden sollten.
+            #
+            # Jeder Name geht durch validate_name. Der Docstring von names.py
+            # verlangt das ausdruecklich fuer jeden Namen aus einer Profildatei
+            # -- hier geschah es bisher nicht, und ein von Hand bearbeitetes
+            # Profil brachte damit einen Eintrag wie '--dbpath=/' unveraendert
+            # bis in packages.x86_64 und damit in die Argumentliste von
+            # pacstrap.
             for name in extra:
                 text = str(name)
-                if text not in config.extra_packages:
-                    config.extra_packages.append(text)
+                if text in config.extra_packages:
+                    continue
+                geprueft = _geprueftes_paket(text)
+                if geprueft is None:
+                    issues.append(
+                        ProfileIssue(
+                            severity="warning",
+                            code="invalid_package",
+                            ref=text,
+                            message=f"Der Paketname {text!r} ist nicht zulaessig.",
+                            action_taken="verworfen",
+                        )
+                    )
+                    continue
+                config.extra_packages.append(geprueft)
 
         choices = data.get("provider_choices") or {}
         if isinstance(choices, Mapping):
-            config.provider_choices = {str(k): str(v) for k, v in choices.items()}
+            geprueft_gewaehlt: dict[str, str] = {}
+            for virtual, provider in choices.items():
+                name = _geprueftes_paket(str(virtual))
+                wert = _geprueftes_paket(str(provider))
+                if name is None or wert is None:
+                    issues.append(
+                        ProfileIssue(
+                            severity="warning",
+                            code="invalid_package",
+                            ref=str(virtual),
+                            message=(
+                                f"Die Anbieterwahl {virtual!r} -> {provider!r} "
+                                f"enthaelt einen unzulaessigen Paketnamen."
+                            ),
+                            action_taken="verworfen",
+                        )
+                    )
+                    continue
+                geprueft_gewaehlt[name] = wert
+            config.provider_choices = geprueft_gewaehlt
 
         result = ProfileLoadResult(
             config=config,
@@ -508,3 +548,27 @@ def _field_predicate_true(predicate: Any, config: BuildConfig) -> bool:
         return bool(predicate.evaluate(_FieldOnlyContext(config)))
     except Exception:
         return True
+
+
+def _geprueftes_paket(text: str) -> str | None:
+    """Ein Paketname, wie ihn die Sicherheitsgrenze in names.py verlangt.
+
+    Versionsangaben (``firefox>=140``) sind in ``packages.x86_64`` erlaubt und
+    werden deshalb vom Namen getrennt geprueft, nicht abgelehnt.
+
+    Liefert ``None``, wenn der Name nicht zulaessig ist -- der Aufrufer meldet
+    das als ProfileIssue, statt ihn stillschweigend weiterzureichen.
+    """
+    from .packages.names import InvalidPackageName, split_constraint, validate_name
+
+    roh = text.strip()
+    if not roh:
+        return None
+    try:
+        name, _bedingung = split_constraint(roh)
+        validate_name(name)
+    except InvalidPackageName:
+        return None
+    except Exception:
+        return None
+    return roh

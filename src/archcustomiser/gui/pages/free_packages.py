@@ -160,6 +160,9 @@ class FreePackagesPage(CatalogPageBase):
         report = self.controller.validate(
             names, provider_choices=self.store.config.provider_choices
         )
+        # Ein frei eingegebenes multilib-Paket braucht das Repository in der
+        # erzeugten pacman.conf -- der Katalog weiss davon nichts.
+        self.store.set_package_report(report)
         for entry in report.entries:
             # Bei mehrdeutigen Eintraegen steht in der Ergebnisspalte eine
             # Auswahlbox. Zusaetzlicher Text wuerde darunter durchscheinen.

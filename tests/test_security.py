@@ -349,3 +349,98 @@ def test_the_catalog_rejects_a_dangerous_menu_title() -> None:
     assert not validation.validate("menu_title", 'Boese" ; x').ok
     assert not validation.validate("menu_title", "a" * 70).ok
     assert not validation.validate("menu_title", "Titel mit $HOME").ok
+
+
+# ---------------------------------------------------------------------------
+# Der Passwort-Hash liegt nicht weltlesbar herum
+# ---------------------------------------------------------------------------
+
+
+def _baum_mit_shadow():
+    from archcustomiser.core.archiso.tree import ProfileTree
+
+    baum = ProfileTree()
+    baum.add_file("profiledef.sh", "# leer", origin="test")
+    baum.add_file(
+        "airootfs/etc/shadow",
+        "jason:$6$salz$hashhashhash:19000:0:99999:7:::",
+        origin="test",
+    )
+    baum.add_permission("/etc/shadow", mode="0400", origin="test")
+    return baum
+
+
+def test_the_password_hash_is_not_world_readable_in_an_archive(tmp_path) -> None:
+    """Ein exportiertes Profil wird weitergegeben -- mitsamt /etc/shadow.
+
+    Die Rechte aus tree.permissions wirken erst im fertigen Abbild; im Archiv
+    stand fuer jede Datei fest 0644. sha512crypt mit 5000 Runden ist offline
+    angreifbar.
+    """
+    import tarfile
+
+    from archcustomiser.core.archiso.sinks import TarSink
+
+    ziel = tmp_path / "profil.tar.gz"
+    TarSink(ziel, root_name="profil").write(_baum_mit_shadow())
+
+    with tarfile.open(ziel) as archiv:
+        shadow = archiv.getmember("profil/airootfs/etc/shadow")
+        andere = archiv.getmember("profil/profiledef.sh")
+
+    assert shadow.mode & 0o077 == 0, "der Passwort-Hash liegt weltlesbar im Archiv"
+    assert andere.mode == 0o644, "die uebrigen Dateien behalten ihren festen Modus"
+
+
+def test_the_password_hash_is_not_world_readable_on_disk(braucht_symlinks, tmp_path) -> None:
+    """Auf einem Mehrbenutzer-Host lag der Hash im Arbeitsverzeichnis offen."""
+    import os
+
+    from archcustomiser.core.archiso.sinks import DirectorySink
+
+    ziel = tmp_path / "profil"
+    DirectorySink(ziel, iso_name="flos").write(_baum_mit_shadow())
+
+    if os.name == "nt":
+        pytest.skip("Windows kennt keine POSIX-Rechte")
+    modus = (ziel / "airootfs" / "etc" / "shadow").stat().st_mode
+    assert modus & 0o077 == 0, "der Passwort-Hash ist fuer andere lesbar"
+
+
+# ---------------------------------------------------------------------------
+# Paketnamen aus einer Profildatei
+# ---------------------------------------------------------------------------
+
+
+def test_a_hand_edited_profile_cannot_smuggle_pacman_switches(tmp_path, catalog) -> None:
+    """names.py verlangt die Pruefung fuer JEDEN Namen aus einer Profildatei.
+
+    profiles.py hielt sich nicht daran: ein Eintrag wie '--dbpath=/' wanderte
+    unveraendert in packages.x86_64 und damit in die Argumentliste von
+    pacstrap.
+    """
+    from archcustomiser.core.profiles import ProfileService
+
+    pfad = tmp_path / "boese.yaml"
+    pfad.write_text(
+        chr(10).join(
+            [
+                "schema_version: 1",
+                "name: Test",
+                "extra_packages:",
+                '  - "--dbpath=/"',
+                '  - "a b"',
+                '  - "../ausbruch"',
+                '  - "firefox"',
+                '  - "vim>=9.0"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    ergebnis = ProfileService(catalog).load(pfad)
+
+    assert ergebnis.config.extra_packages == ["firefox", "vim>=9.0"]
+    verworfen = [i for i in ergebnis.issues if i.code == "invalid_package"]
+    assert len(verworfen) == 3
+    assert all(i.action_taken == "verworfen" for i in verworfen)

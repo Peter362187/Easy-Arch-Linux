@@ -174,3 +174,64 @@ def test_plan_text_contains_no_secrets(catalog, resolver, desktop_config) -> Non
     assert geheim not in text
     assert geheim not in repr(plan)
     assert "flos-1.0-x86_64.iso" in text
+
+
+# ---------------------------------------------------------------------------
+# Was archinstall bekommt
+# ---------------------------------------------------------------------------
+
+
+def test_the_locale_is_split_for_archinstall(catalog, resolver, desktop_config) -> None:
+    """archinstall setzt LANG aus sys_lang und sys_enc wieder zusammen.
+
+    Mit sys_lang='de_DE.UTF-8' und sys_enc='UTF-8' entstand
+    'de_DE.UTF-8.UTF-8'; locale-gen scheiterte daran, und das installierte
+    System hatte keine gueltige Locale.
+    """
+    from archcustomiser.core.plan import build_archinstall_config
+
+    desktop_config.set_field("basics.locale", "de_DE.UTF-8")
+    dokument = build_archinstall_config(
+        desktop_config, resolver.resolve(desktop_config)
+    )
+    assert dokument["locale_config"]["sys_lang"] == "de_DE"
+    assert dokument["locale_config"]["sys_enc"] == "UTF-8"
+
+
+def test_selected_packages_reach_the_installed_system(catalog, resolver) -> None:
+    """archinstall bringt ueber sein Profil nur die Desktop-Umgebung mit.
+
+    Programme, Treiber und Window Manager standen deshalb nur auf der Live-ISO
+    -- das installierte System war ein anderes als das, was die
+    Zusammenfassung zeigte.
+    """
+    from archcustomiser.core.config import BuildConfig
+    from archcustomiser.core.plan import build_archinstall_config
+
+    config = BuildConfig()
+    for ref in ("desktop.kde", "kernel.linux", "apps.firefox", "audio.pipewire"):
+        config.add(ref)
+    dokument = build_archinstall_config(config, resolver.resolve(config))
+
+    assert "firefox" in dokument["packages"]
+    # archiso-Infrastruktur gehoert nicht ins installierte System.
+    assert "mkinitcpio-archiso" not in dokument["packages"]
+
+
+def test_testing_repositories_are_mapped_to_the_archinstall_name(catalog, resolver) -> None:
+    """pacman.conf kennt core-testing, archinstall nur den Sammelbegriff."""
+    import dataclasses
+
+    from archcustomiser.core.config import BuildConfig
+    from archcustomiser.core.plan import build_archinstall_config
+
+    config = BuildConfig()
+    config.add("kernel.linux")
+    aufloesung = resolver.resolve(config)
+    aufloesung = dataclasses.replace(
+        aufloesung, repositories=("core-testing", "multilib")
+    )
+
+    dokument = build_archinstall_config(config, aufloesung)
+    optional = dokument["mirror_config"]["optional_repositories"]
+    assert sorted(optional) == ["multilib", "testing"]

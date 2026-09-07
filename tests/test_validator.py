@@ -142,3 +142,61 @@ def test_size_is_never_displayed_as_zero(size_bytes, expected) -> None:
     )
     assert entry.size_text == (f", {expected}" if expected else "")
     assert "0 MB" not in entry.size_text
+
+
+def test_a_partial_index_never_claims_a_package_is_missing(sample_index) -> None:
+    """Faellt ein Repository aus, gilt der Rest nicht als vollstaendig.
+
+    Vorher meldete ein Teilindex jedes Paket des ausgefallenen Repositories als
+    "nicht gefunden" -- blockierend, mit Tippfehler-Vorschlaegen. Genau die
+    Aussage, die die zentrale Zusicherung der Schicht verbietet.
+    """
+    import dataclasses
+
+    from archcustomiser.core.packages.models import EntryKind
+    from archcustomiser.core.packages.validator import classify
+
+    # Ohne Ausfall: unbekannte Namen sind unbekannt.
+    assert classify("gibtesnicht", sample_index).kind is EntryKind.NOT_FOUND
+
+    unvollstaendig = dataclasses.replace(
+        sample_index.meta, missing_repos=("core",)
+    )
+    sample_index.meta = unvollstaendig
+
+    ergebnis = classify("linux", sample_index)
+    assert ergebnis.kind is EntryKind.UNVERIFIED
+    assert any("core" in notiz for notiz in ergebnis.notes)
+
+
+def test_the_chosen_provider_is_named_in_the_message(sample_index) -> None:
+    """Der Text nannte weiterhin den alphabetisch ersten Anbieter."""
+    from archcustomiser.core.packages.validator import classify
+
+    ergebnis = classify(
+        "ttf-font", sample_index, provider_choices={"ttf-font": "ttf-dejavu"}
+    )
+    assert "ttf-dejavu" in ergebnis.message
+
+
+def test_free_multilib_packages_pull_in_their_repository(sample_index) -> None:
+    """Ein frei eingegebenes lib32-Paket braucht multilib in der pacman.conf.
+
+    Der Katalog nennt das Repository nur an seinen eigenen Optionen; ein
+    Freitext-Paket wurde zwar gegen multilib geprueft und als gefunden
+    gemeldet, aktivierte es aber nicht -- pacstrap brach im Bau ab.
+    """
+    from archcustomiser.core.packages.validator import validate_all
+
+    bericht = validate_all(["firefox"], sample_index)
+    assert bericht.required_repositories() == ()
+
+    # Das Testarchiv fuehrt alles unter 'extra'; ein multilib-Eintrag wird
+    # deshalb von Hand nachgestellt.
+    import dataclasses
+
+    from archcustomiser.core.packages.models import ValidationReport
+
+    eintrag = dataclasses.replace(bericht.entries[0], repo="multilib")
+    kuenstlich = ValidationReport(entries=(eintrag,), index_meta=bericht.index_meta)
+    assert kuenstlich.required_repositories() == ("multilib",)

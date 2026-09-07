@@ -189,6 +189,13 @@ def parse_syncdb(data: bytes, repo: str) -> tuple[PackageInfo, ...]:
         raise
     except (tarfile.TarError, EOFError, OSError) as exc:
         raise RepositoryDataError(repo, f"{type(exc).__name__}: {exc}") from exc
+    except Exception as exc:
+        # gzip und lzma reichen bei beschaedigten Daten zlib.error bzw.
+        # LZMAError durch -- weder OSError noch TarError. Die Ausnahme
+        # durchlief bisher die gesamte Schicht bis in den Worker, ohne dass
+        # jemand den defekten Zwischenspeicher verwarf: jeder Start scheiterte
+        # danach erneut, bis die Frist ablief.
+        raise RepositoryDataError(repo, f"{type(exc).__name__}: {exc}") from exc
 
     if not packages:
         raise RepositoryDataError(repo, "Archiv enthaelt keine lesbaren Paketeintraege")

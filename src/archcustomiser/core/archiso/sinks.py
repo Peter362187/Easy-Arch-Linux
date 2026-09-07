@@ -127,10 +127,21 @@ class DirectorySink:
         total = tree.file_count + tree.symlink_count
         done = 0
 
+        streng = _strenge_pfade(tree)
+
         for entry in tree.files.values():
             destination = root / entry.path
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes(entry.content)
+            if entry.path in streng:
+                # /etc/shadow traegt den Passwort-Hash. Die Rechte aus
+                # tree.permissions wirken erst im fertigen Abbild (mkarchiso
+                # kopiert das airootfs mit --no-preserve=mode); auf dem Host
+                # lag die Datei bis hierher mit 0644 -- fuer jeden anderen
+                # lokalen Benutzer lesbar, und in einem exportierten Profil
+                # sogar weitergegeben. sha512crypt mit 5000 Runden ist offline
+                # angreifbar.
+                _nur_fuer_mich(destination)
             done += 1
             if progress and done % PROGRESS_STEP == 0:
                 progress(done, total)
@@ -215,6 +226,7 @@ class TarSink:
         raw = io.BytesIO()
         total = tree.file_count + tree.symlink_count
         done = 0
+        streng = _strenge_pfade(tree)
 
         with tarfile.open(fileobj=raw, mode="w", format=tarfile.GNU_FORMAT) as archive:
             root = tarfile.TarInfo(self.root_name)
@@ -235,7 +247,12 @@ class TarSink:
                 if entry is not None:
                     info = tarfile.TarInfo(f"{self.root_name}/{path}")
                     info.size = len(entry.content)
-                    info.mode = 0o644
+                    # Dieselbe Ueberlegung wie bei der Verzeichnis-Senke: ein
+                    # exportiertes Profil wird weitergegeben, und /etc/shadow
+                    # darf darin nicht weltlesbar liegen. Der feste Modus
+                    # bleibt sonst erhalten -- er haelt das Archiv bytegleich
+                    # reproduzierbar.
+                    info.mode = 0o600 if path in streng else 0o644
                     info.mtime = self.mtime
                     archive.addfile(info, io.BytesIO(entry.content))
                 else:
@@ -269,3 +286,41 @@ class TarSink:
             for index in range(1, len(parts) + 1):
                 found.add("/".join(parts[:index]))
         return tuple(sorted(found))
+
+
+def _strenge_pfade(tree: ProfileTree) -> frozenset[str]:
+    """Die Baumpfade, deren Rechte im Abbild keinen Fremdzugriff zulassen.
+
+    ``tree.permissions`` ist nach den Pfaden *im Abbild* geschluesselt
+    (``/etc/shadow``), die Dateien liegen im Baum aber unter ``airootfs/...``.
+    Diese Funktion bildet das eine auf das andere ab.
+
+    Beruecksichtigt wird alles, was fuer Gruppe und andere keinerlei Recht
+    vorsieht -- also 0400, 0600 und 0700. Genau dort stehen die Geheimnisse.
+    """
+    streng: set[str] = set()
+    for abbildpfad, eintrag in tree.permissions.items():
+        try:
+            rechte = int(str(eintrag.mode), 8)
+        except (TypeError, ValueError):
+            continue
+        if rechte & 0o077:
+            continue
+        baumpfad = "airootfs/" + str(abbildpfad).lstrip("/")
+        if baumpfad in tree.files:
+            streng.add(baumpfad)
+    return frozenset(streng)
+
+
+def _nur_fuer_mich(pfad: Path) -> None:
+    """Entzieht Gruppe und anderen jedes Recht -- soweit das System das kennt.
+
+    Unter Windows gibt es keine POSIX-Modi; dort ist der Aufruf wirkungslos
+    und darf deshalb nicht scheitern.
+    """
+    if os.name == "nt":
+        return
+    try:
+        pfad.chmod(0o600)
+    except OSError:
+        log.debug("Rechte von %s liessen sich nicht einschraenken", pfad, exc_info=True)

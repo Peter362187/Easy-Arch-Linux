@@ -99,6 +99,27 @@ class Resolution:
     issues: tuple[Issue, ...]
     estimated_size_mb: int = 0
 
+    def mit_repositories(self, weitere: Iterable[str]) -> "Resolution":
+        """Dieselbe Aufloesung, um zusaetzliche Repositorien ergaenzt.
+
+        Der Katalog nennt ein Repository nur an der Option, die es braucht
+        (``repos: [multilib]`` bei Steam). Ein *frei eingegebenes* Paket aus
+        multilib -- etwa ``lib32-vulkan-icd-loader`` -- wurde dagegen gegen
+        multilib geprueft und als gefunden gemeldet, obwohl die erzeugte
+        pacman.conf das Repository gar nicht aktiviert: pacstrap brach dann
+        mitten im Bau mit "target not found" ab.
+
+        Die Paketschicht weiss, aus welchem Repository ein Name stammt; sie
+        reicht das hierueber nach. Bewusst als neue Instanz -- die Aufloesung
+        bleibt unveraenderlich.
+        """
+        import dataclasses
+
+        zusammen = tuple(sorted(set(self.repositories) | {r for r in weitere if r}))
+        if zusammen == self.repositories:
+            return self
+        return dataclasses.replace(self, repositories=zusammen)
+
     # -- bequeme Sichten ------------------------------------------------------
     @property
     def kernel_suffix(self) -> str:
@@ -483,7 +504,11 @@ class Resolver:
                         category_id=category.id,
                     )
                 )
-            if category.selection_mode is SelectionMode.SINGLE and count > 1:
+            if (
+            category.selection_mode
+            in (SelectionMode.SINGLE, SelectionMode.SINGLE_OPTIONAL)
+            and count > 1
+        ):
                 issues.append(
                     Issue(
                         severity="error",

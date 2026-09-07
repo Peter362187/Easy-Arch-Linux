@@ -197,7 +197,16 @@ class RemoteIndexBackend:
                 raise failures[0]
             raise NetworkUnavailable("keine Paketdaten verfuegbar")
 
-        meta = IndexMetadata(backend=self.name, arch=self.config.arch, repos=tuple(metas))
+        geladen = {name for name, _ in repo_packages}
+        fehlend = tuple(repo for repo in self.config.repos if repo not in geladen)
+        if fehlend:
+            log.warning("Teilindex: %s fehlen", ", ".join(fehlend))
+        meta = IndexMetadata(
+            backend=self.name,
+            arch=self.config.arch,
+            repos=tuple(metas),
+            missing_repos=fehlend,
+        )
         index = build_index(repo_packages, meta)
         if progress is not None:
             progress("fertig", 1.0)

@@ -83,6 +83,60 @@ def _set_nested(target: dict[str, Any], dotted_key: str, value: Any) -> None:
     node[parts[-1]] = value
 
 
+# Was nur die Live-ISO braucht und im installierten System nichts verloren
+# hat: archiso-Infrastruktur und der Installer selbst.
+INFRASTRUKTUR_PAKETE = frozenset(
+    {
+        "archiso",
+        "arch-install-scripts",
+        "mkinitcpio",
+        "mkinitcpio-archiso",
+        "mkinitcpio-nfs-utils",
+        "syslinux",
+        "memtest86+",
+        "memtest86+-efi",
+        "edk2-shell",
+        "archinstall",
+    }
+)
+
+# Der Katalog nennt die Repositorien so, wie sie in pacman.conf heissen.
+# archinstall kennt dagegen nur zwei Sammelbegriffe -- 'testing' steht dort
+# fuer core-testing, extra-testing und multilib-testing zusammen.
+OPTIONALE_REPOS = {
+    "multilib": "multilib",
+    "core-testing": "testing",
+    "extra-testing": "testing",
+    "multilib-testing": "testing",
+    "testing": "testing",
+}
+
+# Dieselben Vorgaben wie im Live-System (core/archiso/airootfs.py) -- vorher
+# standen hier 'de_DE.UTF-8'/'de-latin1'/'Europe/Berlin' und dort
+# 'C.UTF-8'/'UTC'. Fehlte das Feld, unterschieden sich beide Systeme.
+DEFAULT_LOCALE = "de_DE.UTF-8"
+DEFAULT_KEYMAP = "de-latin1"
+DEFAULT_TIMEZONE = "Europe/Berlin"
+
+
+def _locale_teilen(locale: str) -> tuple[str, str]:
+    """Zerlegt 'de_DE.UTF-8' in Sprache und Kodierung.
+
+    archinstall setzt LANG aus beiden Feldern wieder zusammen. Mit
+    sys_lang='de_DE.UTF-8' und sys_enc='UTF-8' entstand 'de_DE.UTF-8.UTF-8' --
+    locale-gen scheiterte daran, und das installierte System hatte keine
+    gueltige Locale.
+    """
+    sprache, trenner, kodierung = locale.partition(".")
+    if not trenner:
+        return locale, "UTF-8"
+    # Modifier wie '@euro' gehoeren zur Sprache, nicht zur Kodierung.
+    if "@" in kodierung:
+        kodierung, _, modifier = kodierung.partition("@")
+        sprache = f"{sprache}@{modifier}"
+    return sprache, kodierung or "UTF-8"
+
+
 def build_archinstall_config(
     config: BuildConfig, resolution: Resolution
 ) -> dict[str, Any]:
@@ -104,18 +158,26 @@ def build_archinstall_config(
         _set_nested(document, dotted_key, value)
 
     document["hostname"] = config.hostname
+    sprache, kodierung = _locale_teilen(
+        config.field_str("basics.locale", DEFAULT_LOCALE)
+    )
     document["locale_config"] = {
-        "kb_layout": config.field_str("basics.keymap", "de-latin1"),
-        "sys_enc": "UTF-8",
-        "sys_lang": config.field_str("basics.locale", "de_DE.UTF-8"),
+        "kb_layout": config.field_str("basics.keymap", DEFAULT_KEYMAP),
+        "sys_enc": kodierung,
+        "sys_lang": sprache,
     }
-    document["timezone"] = config.field_str("basics.timezone", "Europe/Berlin")
+    document["timezone"] = config.field_str("basics.timezone", DEFAULT_TIMEZONE)
     document["ntp"] = config.field_bool("basics.ntp", True)
 
-    # Nur was der Benutzer ausdruecklich zusaetzlich wollte: die Pakete der
-    # gewaehlten Optionen bringt archinstall ueber sein Profil selbst mit.
-    if config.extra_packages:
-        document["packages"] = sorted(set(config.extra_packages))
+    # archinstall bringt ueber sein Profil nur mit, was das Profil kennt --
+    # also die Desktop-Umgebung. Alles andere (Programme, Treiber, Window
+    # Manager, frei eingegebene Pakete) stand bisher nur auf der Live-ISO: das
+    # installierte System war ein anderes als das, was die Zusammenfassung
+    # zeigte. Doppelte Nennungen sind harmlos, pacman dedupliziert.
+    pakete = set(resolution.package_names) | set(config.extra_packages)
+    pakete -= INFRASTRUKTUR_PAKETE
+    if pakete:
+        document["packages"] = sorted(pakete)
 
     services = sorted(
         {
@@ -127,7 +189,13 @@ def build_archinstall_config(
     if services:
         document["services"] = services
 
-    optional_repos = [repo for repo in resolution.repositories if repo in ("multilib", "testing")]
+    optional_repos = sorted(
+        {
+            OPTIONALE_REPOS[repo]
+            for repo in resolution.repositories
+            if repo in OPTIONALE_REPOS
+        }
+    )
     if optional_repos:
         # Ohne diesen Eintrag findet die Installation Steam nicht -- multilib
         # ist in der Standardkonfiguration abgeschaltet.
