@@ -227,6 +227,11 @@ class BuildDialog(QDialog):
             f"{theme.format_size(size_bytes) or 'unbekannte Groesse'} "
             f"in {self._elapsed.toString('mm:ss')}  ·  {outcome.iso_path}"
         )
+        # Der Pfad ist das Wertvollste am Ergebnis -- er muss sich markieren
+        # und kopieren lassen.
+        self.detail.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
         self.folder_button.setEnabled(outcome.iso_path is not None)
         if outcome.warnings:
             self.log.appendPlainText(
@@ -271,7 +276,13 @@ class BuildDialog(QDialog):
         if log_path is None:
             from ...core.logging_setup import build_log_dir
 
-            found = sorted(build_log_dir().glob("*.log")) if build_log_dir().is_dir() else []
+            # Nach Aenderungszeit, nicht lexikografisch: bei abweichender
+            # Namensgebung oeffnete "Protokoll oeffnen" sonst die falsche Datei.
+            found = (
+                sorted(build_log_dir().glob("*.log"), key=lambda p: p.stat().st_mtime)
+                if build_log_dir().is_dir()
+                else []
+            )
             log_path = found[-1] if found else None
         self._log_path = log_path
         self.log_button.setEnabled(log_path is not None)
@@ -297,6 +308,13 @@ class BuildDialog(QDialog):
         )
         if answer != QMessageBox.StandardButton.Yes:
             return
+        if self._done:
+            # Die Rueckfrage ist modal, die Signale des Jobs laufen weiter:
+            # der Bau kann waehrend der Frage fertig geworden sein. Ohne diese
+            # Pruefung wurde die Ueberschrift "Fertig" durch "Wird abgebrochen"
+            # ersetzt und der Controller merkte sich einen Abbruch, obwohl die
+            # ISO fertig war.
+            return
         self.cancel_button.setEnabled(False)
         self.headline.setText("Wird abgebrochen ...")
         self.job.cancel()
@@ -310,6 +328,20 @@ class BuildDialog(QDialog):
     def _open_folder(self) -> None:
         if self.outcome is not None and self.outcome.iso_path is not None:
             _open(self.outcome.iso_path.parent)
+
+    def reject(self) -> None:
+        """Escape darf einen laufenden Bau nicht aus den Augen verlieren.
+
+        ``QDialog`` ruft bei Escape direkt ``reject()`` auf, nicht ``close()``
+        -- ``closeEvent`` wurde also uebergangen. ``exec()`` kehrte zurueck,
+        der Bau-Faden lief weiter, ein zweiter Bau war startbar (in dasselbe
+        Arbeitsverzeichnis), und beim Beenden des Programms zerstoerte Qt einen
+        noch laufenden QThread.
+        """
+        if self._done or not self.job.running:
+            super().reject()
+            return
+        self._on_cancel_clicked()
 
     def closeEvent(self, event) -> None:
         """Solange gebaut wird, bleibt der Dialog offen.

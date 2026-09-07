@@ -79,7 +79,18 @@ class CatalogFormPage(CatalogPageBase):
         self._build_ui()
         self._add_required_legend()
         self.add_help_link()
-        self.store.fieldChanged.connect(lambda _binding: self._update_visibility())
+        self.store.fieldChanged.connect(self._on_field_changed)
+
+    def _on_field_changed(self, _binding: str) -> None:
+        """Sichtbarkeit UND Gueltigkeit neu bestimmen.
+
+        Frueher lief nur die Sichtbarkeit. Wurde ein ungueltiges
+        Pflichtfeld durch eine andere Eingabe unsichtbar, blieb sein
+        Eintrag in ``_valid`` bis zum naechsten Timerlauf auf False und
+        sperrte den Weiter-Knopf.
+        """
+        self._update_visibility()
+        self._timer.start()
 
     # -- Aufbau ---------------------------------------------------------------
     def _build_ui(self) -> None:
@@ -216,10 +227,24 @@ class CatalogFormPage(CatalogPageBase):
             self.store.set_field(spec.binding, value)
         self._timer.start()
 
+    # Validatoren, hinter denen ein Verzeichnis steht und keine Datei.
+    _VERZEICHNIS_VALIDATOREN = frozenset({"writable_dir"})
+
     def _browse(self, spec: FieldSpec) -> None:
-        selected, _filter = QFileDialog.getOpenFileName(
-            self, spec.label, "", spec.file_filter or "Alle Dateien (*)"
-        )
+        """Oeffnet den Dialog, der zum Feld passt.
+
+        Fuer 'Ausgabeverzeichnis' und 'Arbeitsverzeichnis' erschien bisher
+        ein Datei-Oeffnen-Dialog; ein Verzeichnis liess sich damit gar
+        nicht waehlen, und eine gewaehlte Datei scheiterte anschliessend
+        am Validator.
+        """
+        start = str(self.store.field(spec.binding) or "")
+        if spec.validator in self._VERZEICHNIS_VALIDATOREN:
+            selected = QFileDialog.getExistingDirectory(self, spec.label, start)
+        else:
+            selected, _filter = QFileDialog.getOpenFileName(
+                self, spec.label, start, spec.file_filter or "Alle Dateien (*)"
+            )
         if selected:
             row = self._rows[spec.id]
             if isinstance(row.widget, QLineEdit):
@@ -231,7 +256,18 @@ class CatalogFormPage(CatalogPageBase):
         for spec_id, row in self._rows.items():
             spec = row.spec
             if spec.secret:
-                continue   # Geheimnisse werden nie zurueckgeschrieben
+                # Geheimnisse werden nie zurueckgeschrieben -- aber ein
+                # leerer SecretStore muss auch ein leeres Feld bedeuten.
+                # Nach dem Laden eines Profils standen sonst weiter Punkte
+                # im Feld, waehrend die Meldung "wird benoetigt" erschien.
+                if not self.store.has_secret(spec.binding):
+                    blocked = row.widget.blockSignals(True)
+                    try:
+                        if isinstance(row.widget, QLineEdit):
+                            row.widget.clear()
+                    finally:
+                        row.widget.blockSignals(blocked)
+                continue
             value = self.store.field(spec.binding, spec.default)
             widget = row.widget
             blocked = widget.blockSignals(True)
@@ -280,12 +316,16 @@ class CatalogFormPage(CatalogPageBase):
                 row.message.hide()
                 continue
 
-            value = (
-                self.store.secrets.get(spec.binding)
-                if spec.secret
-                else self.store.field(spec.binding, spec.default)
-            )
-            text = value.reveal() if spec.secret and value is not None else value
+            if spec.secret:
+                # Direkt aus dem Feld lesen, nicht aus dem Store: dorthin
+                # wandert der Wert erst bei editingFinished (damit nicht
+                # jeder Zwischenstand als Literal beim Log-Filter landet).
+                # Die Pruefung sah deshalb waehrend des Tippens immer den
+                # alten Wert: die Wiederholung meldete dauerhaft "stimmen
+                # nicht ueberein", und der Weiter-Knopf brauchte zwei Klicks.
+                text = self._angezeigter_text(row)
+            else:
+                text = self.store.field(spec.binding, spec.default)
 
             if spec.required and not str(text or "").strip():
                 self._show(row, f"{spec.label} wird benoetigt.", ok=False)
@@ -378,17 +418,29 @@ class CatalogFormPage(CatalogPageBase):
             meldungen.append(hinweis)
         self.set_local_issues(tuple(meldungen))
 
+    def _angezeigter_text(self, row: _FieldRow) -> str:
+        """Was gerade im Eingabefeld steht -- unabhaengig vom Store."""
+        widget = row.widget
+        if isinstance(widget, QLineEdit):
+            return widget.text()
+        if isinstance(widget, QTextEdit):
+            return widget.toPlainText()
+        return ""
+
     def _value_of(self, field_id: str, *, secret: bool) -> str:
         """Der Wert eines anderen Feldes -- aus dem passenden Speicher.
 
         Geheime Felder liegen im ``SecretStore``, alle anderen in der
         Konfiguration. Vorher wurde nur der erste Fall bedacht.
         """
-        binding = self._binding_of(field_id)
         if secret:
-            wert = self.store.secrets.get(binding)
-            return wert.reveal() if wert is not None else ""
-        return str(self.store.field(binding) or "")
+            # Auch hier der angezeigte Text: der Store hinkt bei geheimen
+            # Feldern bis zum Fokuswechsel hinterher.
+            row = self._rows.get(field_id)
+            if row is not None:
+                return self._angezeigter_text(row)
+            return ""
+        return str(self.store.field(self._binding_of(field_id)) or "")
 
     def _binding_of(self, field_id: str) -> str:
         spec = self.category.field(field_id)

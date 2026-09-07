@@ -350,14 +350,39 @@ class Catalog:
         return tuple(c for c in self.categories if c.visible)
 
     def ordered_categories(self) -> tuple[Category, ...]:
-        """Reihenfolge aus step_order, Rest nach step angehaengt."""
+        """Reihenfolge aus step_order; unbekannte Kategorien nach ``step``.
+
+        Eine Kategorie aus einem Benutzer-Overlay steht nicht in
+        ``step_order`` (die kommt nur aus catalog.yaml). Frueher landete
+        sie deshalb hinter *allen* gelisteten -- also auch hinter der
+        Zusammenfassung, hinter der der Bau beginnt. Die neue Seite kam
+        damit nach dem Dry-Run, und 'ISO erstellen' stand auf der
+        falschen Seite. Das dokumentierte Versprechen, eine Kategorie sei
+        eine YAML-Datei, war fuer neue Kategorien gebrochen.
+
+        Jetzt entscheidet bei unbekannten Kategorien die Schrittnummer:
+        sie werden zwischen die gelisteten einsortiert, an der Stelle,
+        die ihr ``step`` vorgibt.
+        """
         index = {name: pos for pos, name in enumerate(self.step_order)}
-        return tuple(
-            sorted(
-                self.categories,
-                key=lambda c: (index.get(c.id, len(index)), c.step, c.id),
-            )
-        )
+        nach_schritt = {
+            kategorie.id: kategorie.step for kategorie in self.categories
+        }
+
+        def platz(kategorie: Category) -> tuple[float, int, str]:
+            if kategorie.id in index:
+                return (float(index[kategorie.id]), kategorie.step, kategorie.id)
+            # Zwischen die gelisteten einsortieren: der Platz der letzten
+            # gelisteten Kategorie mit kleinerer Schrittnummer, plus ein
+            # halber Schritt.
+            davor = -1.0
+            for name, position in index.items():
+                schritt = nach_schritt.get(name)
+                if schritt is not None and schritt < kategorie.step:
+                    davor = max(davor, float(position))
+            return (davor + 0.5, kategorie.step, kategorie.id)
+
+        return tuple(sorted(self.categories, key=platz))
 
     def all_options(self) -> Iterator[Option]:
         for category in self.categories:

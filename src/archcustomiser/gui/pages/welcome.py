@@ -95,6 +95,14 @@ class WelcomePage(QWizardPage):
         self.profiles = profiles
         self.environment = environment
         self._loaded_from: Path | None = None
+        # Was zuletzt tatsaechlich angewendet wurde. Ohne diesen Merker
+        # verwarf jedes erneute Weitergehen von dieser Seite die gesamte
+        # Zusammenstellung: die Startseite ist ueber 'Zurueck' von der
+        # ersten Katalogseite erreichbar, und 'Von vorn beginnen' ist
+        # vorgehakt. Die einzige Stelle im Programm, die Arbeit ohne
+        # Warnung vernichtete -- waehrend der Wizard beim Beenden
+        # ausdruecklich nachfragt.
+        self._angewendet: object = None
 
         self.setTitle("Willkommen")
         self.setSubTitle(
@@ -198,7 +206,12 @@ class WelcomePage(QWizardPage):
         sich anders entscheidet, soll den Store nicht schon veraendert haben.
         """
         if self.wants_empty():
+            if self._angewendet == ("leer",):
+                return True          # nichts hat sich geaendert
+            if not self._darf_verwerfen():
+                return False
             self.store.reset()
+            self._angewendet = ("leer",)
             return True
 
         if self.wants_file_dialog():
@@ -207,12 +220,39 @@ class WelcomePage(QWizardPage):
             )
             if not pfad:
                 return False          # abgebrochen -- auf der Seite bleiben
-            return self._load(Path(pfad))
+            if not self._load(Path(pfad)):
+                return False
+            self._angewendet = ("datei", pfad)
+            return True
 
         info = self.selected_profile()
         if info is None:
             return False
-        return self._load(info.path)
+        if self._angewendet == ("vorlage", str(info.path)):
+            return True          # dieselbe Vorlage, nichts zu tun
+        if not self._darf_verwerfen():
+            return False
+        if not self._load(info.path):
+            return False
+        self._angewendet = ("vorlage", str(info.path))
+        return True
+
+    def _darf_verwerfen(self) -> bool:
+        """Fragt nach, bevor eine begonnene Zusammenstellung verworfen wird.
+
+        Beim ersten Durchgang gibt es nichts zu verlieren; dann erscheint
+        auch keine Frage.
+        """
+        if self._angewendet is None:
+            return True
+        antwort = QMessageBox.question(
+            self,
+            "Zusammenstellung verwerfen?",
+            "Die bisherige Auswahl wird dabei zurueckgesetzt.\n\nFortfahren?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return antwort == QMessageBox.StandardButton.Yes
 
     def _load(self, pfad: Path) -> bool:
         try:

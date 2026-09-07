@@ -370,3 +370,205 @@ def test_a_second_click_does_not_start_a_second_cancel(qapp, catalog, resolver) 
     job.wait(10_000)
 
     assert Zaehlend.aufrufe == 1
+
+
+# ---------------------------------------------------------------------------
+# Die Startseite ist keine Datenfalle mehr
+# ---------------------------------------------------------------------------
+
+
+def test_going_back_to_the_welcome_page_keeps_the_selection(wizard, store, monkeypatch) -> None:
+    """Zurueck zur Startseite und wieder vor verwarf alles.
+
+    "Von vorn beginnen" ist vorgehakt, und validatePage rief bedingungslos
+    store.reset(). Die einzige Stelle im Programm, die Arbeit ohne Warnung
+    vernichtete -- waehrend der Wizard beim Beenden ausdruecklich nachfragt.
+    """
+    wizard.restart()
+    seite = wizard.welcome
+
+    # Erster Durchgang: "Von vorn beginnen" anwenden.
+    assert seite.validatePage()
+
+    store.toggle("desktop.kde", True)
+    assert "kde" in store.selected("desktop")
+
+    # Zurueck und wieder vor -- die Auswahl muss stehen bleiben.
+    assert seite.validatePage()
+    assert "kde" in store.selected("desktop"), "die Zusammenstellung wurde verworfen"
+
+
+def test_changing_the_welcome_choice_asks_before_discarding(wizard, store, monkeypatch) -> None:
+    """Wer die Wahl aendert, wird gefragt -- und ein Nein bleibt wirksam."""
+    from PySide6.QtWidgets import QMessageBox
+
+    wizard.restart()
+    seite = wizard.welcome
+    assert seite.validatePage()
+    store.toggle("desktop.kde", True)
+
+    gefragt: list[str] = []
+
+    def nein(*args, **kwargs):
+        gefragt.append("ja")
+        return QMessageBox.StandardButton.No
+
+    monkeypatch.setattr(QMessageBox, "question", nein)
+
+    vorlage = next(karte for karte, info in seite._choices if info is not None)
+    vorlage.button.setChecked(True)
+
+    assert not seite.validatePage(), "trotz Nein wurde weitergegangen"
+    assert gefragt, "es wurde gar nicht gefragt"
+    assert "kde" in store.selected("desktop")
+
+
+# ---------------------------------------------------------------------------
+# Der Baudialog laesst sich nicht wegdruecken
+# ---------------------------------------------------------------------------
+
+
+class _FakeJob:
+    """Ein Bauauftrag, der nur so tut -- fuer Dialogtests."""
+
+    def __init__(self, running: bool = True) -> None:
+        from PySide6.QtCore import QObject, Signal
+
+        class Signale(QObject):
+            stepChanged = Signal(object, str)
+            progressChanged = Signal(float, str, str)
+            linesReceived = Signal(list)
+            finished = Signal(object)
+            failed = Signal(object)
+            cancelled = Signal()
+
+        self._signale = Signale()
+        for name in (
+            "stepChanged",
+            "progressChanged",
+            "linesReceived",
+            "finished",
+            "failed",
+            "cancelled",
+        ):
+            setattr(self, name, getattr(self._signale, name))
+        self.running = running
+        self.cancelling = False
+        self.cancel_calls = 0
+
+    def cancel(self) -> None:
+        self.cancel_calls += 1
+        self.cancelling = True
+
+    def start(self, *args, **kwargs) -> None:
+        pass
+
+
+def test_escape_does_not_abandon_a_running_build(qapp, tmp_path, monkeypatch) -> None:
+    """QDialog ruft bei Escape reject(), nicht close().
+
+    closeEvent war ueberschrieben, reject() nicht: der Dialog verschwand, der
+    Bau-Faden lief weiter, ein zweiter Bau war startbar, und beim Beenden
+    zerstoerte Qt einen laufenden QThread.
+    """
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QKeyEvent
+    from PySide6.QtWidgets import QMessageBox
+
+    from archcustomiser.gui.widgets.build_dialog import BuildDialog
+
+    monkeypatch.setattr(
+        QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.No
+    )
+
+    job = _FakeJob(running=True)
+    dialog = BuildDialog(job, tmp_path / "work", tmp_path / "out")
+    dialog.reject()
+
+    assert dialog.result() != int(dialog.DialogCode.Rejected) or dialog.isVisible() is False
+    assert job.cancel_calls == 0, "ohne Bestaetigung darf nicht abgebrochen werden"
+
+
+def test_a_finished_build_is_not_cancelled_afterwards(qapp, tmp_path, monkeypatch) -> None:
+    """Die Rueckfrage ist modal -- der Bau kann waehrenddessen fertig werden."""
+    from PySide6.QtWidgets import QMessageBox
+
+    from archcustomiser.gui.widgets.build_dialog import BuildDialog
+
+    job = _FakeJob(running=True)
+    dialog = BuildDialog(job, tmp_path / "work", tmp_path / "out")
+
+    def fertig_werden(*args, **kwargs):
+        dialog._done = True
+        return QMessageBox.StandardButton.Yes
+
+    monkeypatch.setattr(QMessageBox, "question", fertig_werden)
+
+    dialog._on_cancel_clicked()
+    assert job.cancel_calls == 0, "ein fertiger Bau wurde nachtraeglich abgebrochen"
+
+
+def test_a_non_cancellable_wait_dialog_ignores_escape(qapp) -> None:
+    """Der Schliessknopf war entfernt, reject() aber nicht ueberschrieben.
+
+    Bei der archiso-Installation lief pacman danach unsichtbar weiter.
+    """
+    from archcustomiser.gui.widgets.wait_dialog import WaitDialog
+
+    dialog = WaitDialog(lambda: None, "laeuft", cancellable=False)
+    dialog.reject()
+    assert not dialog.isHidden() or dialog.result() == 0
+
+
+# ---------------------------------------------------------------------------
+# Formularfelder
+# ---------------------------------------------------------------------------
+
+
+def test_a_directory_field_opens_a_directory_dialog(wizard, catalog, monkeypatch) -> None:
+    """Fuer Ausgabe- und Arbeitsverzeichnis erschien ein Datei-Dialog."""
+    from PySide6.QtWidgets import QFileDialog
+
+    seite = wizard.page(catalog.category("build").step)
+    spec = catalog.category("build").field("output_dir")
+    assert spec is not None and spec.validator == "writable_dir"
+
+    gerufen: list[str] = []
+    monkeypatch.setattr(
+        QFileDialog, "getExistingDirectory", lambda *a, **k: gerufen.append("dir") or ""
+    )
+    monkeypatch.setattr(
+        QFileDialog,
+        "getOpenFileName",
+        lambda *a, **k: (gerufen.append("file") or "", ""),
+    )
+
+    seite._browse(spec)
+    assert gerufen == ["dir"], "es erschien der falsche Dialog"
+
+
+def test_the_password_field_is_cleared_when_the_store_is(wizard, catalog, store) -> None:
+    """Nach dem Laden eines Profils standen weiter Punkte im Feld."""
+    from PySide6.QtWidgets import QLineEdit
+
+    from archcustomiser.core.config import BuildConfig
+
+    seite = wizard.page(catalog.category("user").step)
+    zeile = seite._rows["password"]
+    assert isinstance(zeile.widget, QLineEdit)
+
+    store.set_secret("user.password", "geheim123")
+    zeile.widget.setText("geheim123")
+
+    store.replace_config(BuildConfig())
+    seite.sync_from_store()
+
+    assert zeile.widget.text() == "", "das Feld zeigt ein Passwort, das es nicht gibt"
+
+
+def test_the_refresh_button_comes_back_after_a_failure(wizard, catalog) -> None:
+    """Der Controller sendet bei einem Fehler nur 'failed', nie 'ready'."""
+    seite = wizard.page(catalog.category("extra_packages").step)
+    seite.refresh_button.setEnabled(False)
+    seite.controller.failed.emit("kaputt")
+    assert seite.refresh_button.isEnabled(), "der Knopf bleibt dauerhaft gesperrt"

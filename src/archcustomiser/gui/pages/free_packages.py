@@ -79,6 +79,12 @@ class FreePackagesPage(CatalogPageBase):
 
         self._build_ui()
         self.controller.ready.connect(lambda _ok: self._revalidate())
+        # Einmal verbunden statt bei jedem Klick: sonst sammelten sich
+        # Mehrfachverbindungen an. Und an BEIDE Ausgaenge -- der
+        # Controller sendet bei einem Fehler nur 'failed', nie 'ready',
+        # und der Knopf blieb dauerhaft gesperrt.
+        self.controller.ready.connect(self._on_refreshed)
+        self.controller.failed.connect(self._on_refresh_failed)
         self.controller.statusChanged.connect(self.status.setText)
         self.add_help_link()
 
@@ -123,18 +129,21 @@ class FreePackagesPage(CatalogPageBase):
     def _refresh(self) -> None:
         from ...core.packages import RefreshPolicy
 
+        if self.controller.loading:
+            # start() kehrt sonst wirkungslos zurueck, der Knopf wuerde
+            # aber trotzdem gesperrt und wieder freigegeben -- ohne dass
+            # ein erzwungenes Neuladen stattgefunden haette.
+            return
         self.refresh_button.setEnabled(False)
-        self.controller.ready.connect(self._on_refreshed)
         self.controller.start(RefreshPolicy.FORCE)
 
     def _on_refreshed(self, _ok: bool) -> None:
         self.refresh_button.setEnabled(True)
-        try:
-            self.controller.ready.disconnect(self._on_refreshed)
-        except (RuntimeError, TypeError):
-            # Schon getrennt oder nie verbunden -- kein Grund zur Sorge, aber
-            # auch kein Grund, gar nichts zu sagen.
-            log.debug("Signal war bereits getrennt", exc_info=True)
+
+    def _on_refresh_failed(self, meldung: str) -> None:
+        """Auch ein Fehlschlag gibt den Knopf wieder frei."""
+        log.warning("Paketdaten nicht ladbar: %s", meldung)
+        self.refresh_button.setEnabled(True)
 
     def sync_from_store(self) -> None:
         current = "\n".join(self.store.extra_packages())

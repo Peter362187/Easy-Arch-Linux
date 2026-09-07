@@ -337,6 +337,10 @@ class BuildWizard(QWizard):
             QMessageBox.warning(self, "Speichern fehlgeschlagen", str(exc))
             return
         self._saved_once = True
+        # Der Vergleichspunkt wandert mit: sonst galt jede spaetere
+        # Aenderung als gesichert, und beim Beenden verschwand sie ohne
+        # Rueckfrage.
+        self._initial_fingerprint = self._fingerprint()
         QMessageBox.information(
             self,
             "Profil gespeichert",
@@ -452,7 +456,7 @@ class BuildWizard(QWizard):
             return
         if antwort == QMessageBox.StandardButton.Save:
             self._save_profile()
-            if not self._saved_once:
+            if self._has_unsaved_work():
                 return          # Speichern abgebrochen -- also auch nicht beenden
         super().reject()
 
@@ -462,8 +466,11 @@ class BuildWizard(QWizard):
         Wer das Programm nur oeffnet und gleich wieder schliesst, soll nicht
         gefragt werden -- die Vorgabewerte allein zaehlen deshalb nicht.
         """
-        if self._saved_once:
-            return False
+        # Verglichen wird immer gegen den letzten gesicherten Stand -- nach
+        # dem Speichern ist das der gespeicherte, davor der Ausgangszustand.
+        # Frueher stand hier ein Merker 'einmal gespeichert', der nie
+        # zurueckgesetzt wurde: alles nach dem ersten Speichern ging beim
+        # Beenden wortlos verloren.
         # Gegen den Ausgangszustand vergleichen, nicht gegen "leer": der Store
         # ist schon beim Start mit den Vorgaben des Katalogs gefuellt --
         # Rechnername, Sprache, Tastatur, Zeitzone. Wer nur oeffnet und wieder
@@ -612,9 +619,13 @@ class BuildWizard(QWizard):
                 "Linux-Untersystem nicht erreichbar",
                 "Die Pruefung ist fehlgeschlagen:\n\n" + str(fehler),
             )
-            return None
+            # None bedeutet fuer den Aufrufer 'lokal bauen'. Wer den
+            # WSL-Dialog abbricht, loeste damit einen lokalen Bauversuch
+            # unter Windows aus -- und bekam die irrefuehrende Frage
+            # 'ISO-Build hier nicht moeglich, Profil exportieren?'.
+            return _ABGEBROCHEN
         if status is None:
-            return None          # vom Benutzer abgebrochen
+            return _ABGEBROCHEN          # vom Benutzer abgebrochen
 
         gefunden = status.find_arch(probe=_ist_arch)
         if status.installed and gefunden is not None:
@@ -622,13 +633,13 @@ class BuildWizard(QWizard):
 
         dialog = WslSetupDialog(status, self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
-            return None
+            return _ABGEBROCHEN
         if dialog.export_requested:
             self._export(as_archive=True)
-            return None
+            return _ABGEBROCHEN
         name = dialog.distribution
         if not name:
-            return None
+            return _ABGEBROCHEN
         return WslExecutionTarget(wsl.WslTarget(name))
 
     @staticmethod
@@ -649,7 +660,30 @@ class BuildWizard(QWizard):
         job = BuildJob(self.catalog, config, self.store.resolution(), self.store.secrets, self)
         if target is not None:
             job.controller.target = target
-        report = job.preflight(work_dir, out_dir)
+
+        # Im Hintergrund: beim WSL-Ziel sind das rund acht
+        # wsl.exe-Aufrufe mit je 60 s Zeitlimit, dazu 'du -sm' ueber das
+        # Bauverzeichnis. Synchron aufgerufen stand das Fenster solange
+        # still und wurde von Windows als 'keine Rueckmeldung' markiert --
+        # genau das, wogegen die Zielsuche davor schon abgesichert ist.
+        from .widgets.wait_dialog import run_with_wait
+
+        report, fehler = run_with_wait(
+            lambda: job.preflight(work_dir, out_dir),
+            "Bauumgebung wird geprueft ..." + '\n\n' +
+            "Das kann einen Moment dauern, wenn ein Linux-Untersystem "
+            "erst starten muss.",
+            parent=self,
+        )
+        if fehler is not None:
+            QMessageBox.warning(
+                self,
+                "Vorabpruefung fehlgeschlagen",
+                "Die Bauumgebung liess sich nicht pruefen:" + '\n\n' + str(fehler),
+            )
+            return
+        if report is None:
+            return          # vom Benutzer abgebrochen
 
         if not report.ok and not self._can_build_here(report):
             self._offer_profile_export(report)

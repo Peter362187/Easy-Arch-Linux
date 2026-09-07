@@ -136,6 +136,21 @@ class BuildJob(QObject):
     def running(self) -> bool:
         return self._thread is not None and self._thread.isRunning()
 
+    @property
+    def busy(self) -> bool:
+        """Ob noch irgendein Faden dieses Auftrags arbeitet.
+
+        Der Abbruch-Faden laeuft weiter, nachdem der Bau-Faden schon
+        "abgebrochen" gemeldet hat: beim WSL-Ziel sind das mehrere
+        wsl.exe-Aufrufe mit je 30 s Zeitlimit. 'running' allein reicht
+        deshalb nicht, um zu entscheiden, ob das Programm beendet werden
+        darf.
+        """
+        if self.running:
+            return True
+        thread = self._cancel_thread
+        return thread is not None and thread.isRunning()
+
     def preflight(self, work_dir: Path, out_dir: Path):
         return self.controller.preflight(work_dir, out_dir)
 
@@ -149,6 +164,12 @@ class BuildJob(QObject):
         thread.finishedOk.connect(self._on_finished)
         thread.failed.connect(self._on_failed)
         thread.cancelledByUser.connect(self._on_cancelled)
+        # Erst wenn der QThread wirklich zu Ende ist, gilt der Auftrag als
+        # beendet. Frueher setzte _finish() den Verweis schon beim
+        # Ergebnis-Signal auf None: 'running' war danach False, wait()
+        # wartete auf nichts, und beim Beenden zerstoerte Qt einen noch
+        # laufenden Thread ("Destroyed while thread is still running").
+        thread.finished.connect(self._on_thread_finished)
         self._thread = thread
         self._flush.start()
         thread.start()
@@ -198,7 +219,13 @@ class BuildJob(QObject):
     def _finish(self) -> None:
         self._flush.stop()
         self._emit_pending()
+
+    def _on_thread_finished(self) -> None:
+        """Der Bau-Faden ist beendet -- erst jetzt darf der Verweis weg."""
+        thread = self._thread
         self._thread = None
+        if thread is not None:
+            thread.deleteLater()
 
     def _on_finished(self, outcome: object) -> None:
         self._finish()
