@@ -204,7 +204,7 @@ def test_directory_sink_refuses_foreign_content(sample_tree: ProfileTree, tmp_pa
     assert (target / "wichtig.txt").read_text(encoding="utf-8") == "bitte nicht loeschen"
 
 
-def test_directory_sink_accepts_empty_target(sample_tree: ProfileTree, tmp_path: Path) -> None:
+def test_directory_sink_accepts_empty_target(braucht_symlinks, sample_tree: ProfileTree, tmp_path: Path) -> None:
     target = tmp_path / "leer"
     target.mkdir()
     DirectorySink(target, iso_name="flos").write(sample_tree)
@@ -212,7 +212,7 @@ def test_directory_sink_accepts_empty_target(sample_tree: ProfileTree, tmp_path:
     assert (target / MARKER_NAME).is_file()
 
 
-def test_directory_sink_overwrites_its_own_profile(sample_tree: ProfileTree, tmp_path: Path) -> None:
+def test_directory_sink_overwrites_its_own_profile(braucht_symlinks, sample_tree: ProfileTree, tmp_path: Path) -> None:
     target = tmp_path / "profil"
     DirectorySink(target, iso_name="flos").write(sample_tree)
     # Zweiter Lauf muss ohne Rueckfrage durchgehen -- es ist unser eigenes Profil.

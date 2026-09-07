@@ -103,6 +103,24 @@ def test_the_gui_recognises_that_marker() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _ohne_systemsonden(monkeypatch) -> None:
+    """Ersetzt die drei Sonden durch Antworten ohne Systemzugriff.
+
+    Ohne das startete ``available_targets()`` im Test tatsaechlich ``wsl.exe``
+    und ``podman info`` -- mit Laufzeiten von Sekunden und einem Ergebnis, das
+    vom Rechner des Entwicklers abhaengt. Geprueft werden soll aber allein,
+    *welche Arten* die Zielwahl auf welcher Plattform ueberhaupt anbietet.
+    """
+    from archcustomiser.core.build import targets
+
+    def sonde(art: str):
+        return lambda: targets.TargetOption(art, f"{art} (Attrappe)", problem="Attrappe")
+
+    monkeypatch.setattr(targets, "_probe_local", sonde("lokal"))
+    monkeypatch.setattr(targets, "_probe_wsl", sonde("wsl"))
+    monkeypatch.setattr(targets, "_probe_container", sonde("container"))
+
+
 def test_wsl_is_never_offered_outside_windows(monkeypatch) -> None:
     """Auf macOS erschien der WSL-Dialog mit zwei Bildschirmen Windows-Text.
 
@@ -111,6 +129,7 @@ def test_wsl_is_never_offered_outside_windows(monkeypatch) -> None:
     """
     from archcustomiser.core.build import targets
 
+    _ohne_systemsonden(monkeypatch)
     monkeypatch.setattr("sys.platform", "darwin")
     arten = {option.kind for option in targets.available_targets()}
     assert "wsl" not in arten, "macOS bekam Windows-Anweisungen"
@@ -120,6 +139,7 @@ def test_the_container_is_not_offered_on_windows(monkeypatch) -> None:
     """Dort gaebe es keine gueltige Pfadzuordnung -- und WSL ist besser."""
     from archcustomiser.core.build import targets
 
+    _ohne_systemsonden(monkeypatch)
     monkeypatch.setattr("sys.platform", "win32")
     arten = {option.kind for option in targets.available_targets()}
     assert "container" not in arten
@@ -129,6 +149,7 @@ def test_a_linux_offers_local_and_container(monkeypatch) -> None:
     """Beides pruefen: ein Arch baut direkt, ein Ubuntu im Container."""
     from archcustomiser.core.build import targets
 
+    _ohne_systemsonden(monkeypatch)
     monkeypatch.setattr("sys.platform", "linux")
     arten = {option.kind for option in targets.available_targets()}
     assert arten == {"lokal", "container"}

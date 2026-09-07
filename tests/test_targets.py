@@ -32,9 +32,15 @@ def test_the_controller_no_longer_asks_for_the_target_type() -> None:
     Als Test formuliert, damit ein spaeteres viertes Ziel nicht wieder mit
     einer isinstance-Abfrage nachgeruestet wird.
     """
-    quelle = Path("src/archcustomiser/core/build/controller.py").read_text(
-        encoding="utf-8"
-    )
+    # Ueber das Modul selbst, nicht ueber einen relativen Pfad: sonst haengt
+    # der Test am Arbeitsverzeichnis des pytest-Aufrufs und faellt anderswo
+    # mit FileNotFoundError aus einem Grund, der nichts mit der Zusicherung
+    # zu tun hat.
+    import inspect
+
+    from archcustomiser.core.build import controller as controller_modul
+
+    quelle = inspect.getsource(controller_modul)
     assert "isinstance(self.target" not in quelle
     assert "self.target.wsl" not in quelle, "auch der Durchgriff muss weg sein"
 

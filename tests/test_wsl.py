@@ -97,10 +97,39 @@ def test_status_without_arch_is_not_usable() -> None:
     assert status.preferred is None
 
 
-def test_detect_does_not_raise_on_this_machine() -> None:
-    """Egal wie das System aussieht -- die Erkennung darf nie werfen."""
+def test_detect_does_not_raise_when_wsl_is_missing(monkeypatch) -> None:
+    """Egal wie das System aussieht -- die Erkennung darf nie werfen.
+
+    Frueher startete dieser Test das echte ``wsl.exe`` (zwei Aufrufe mit je
+    60 s Zeitlimit) und pruefte danach nur, dass ``installed`` ein bool ist.
+    Ergebnis und Laufzeit hingen damit vom Rechner ab. Hier wird die
+    Verwaltungsschicht ersetzt und beide Ausgaenge geprueft.
+    """
+    monkeypatch.setattr(wsl, "wsl_executable", lambda: None)
     status = wsl.detect()
     assert isinstance(status.installed, bool)
+    assert not status.installed
+    assert status.problem
+
+
+def test_detect_reports_a_missing_subsystem(monkeypatch) -> None:
+    """Exit-Code 50 heisst: WSL ist gar nicht eingerichtet."""
+    import subprocess
+
+    meldung = "Das Windows-Subsystem fuer Linux ist nicht installiert." + chr(13) + chr(10)
+
+    monkeypatch.setattr(wsl.os, "name", "nt")
+    monkeypatch.setattr(wsl, "wsl_executable", lambda: "wsl.exe")
+    monkeypatch.setattr(
+        wsl.subprocess,
+        "run",
+        lambda *a, **k: subprocess.CompletedProcess(
+            a[0] if a else [], wsl.EXIT_NOT_INSTALLED, b"", meldung.encode("utf-16-le")
+        ),
+    )
+    status = wsl.detect()
+    assert not status.installed
+    assert "nicht installiert" in status.problem
 
 
 # ---------------------------------------------------------------------------

@@ -94,9 +94,17 @@ def test_the_distro_name_may_not_impersonate_arch(wert: str) -> None:
     _fehler("distro_name", wert)
 
 
-def test_an_arch_prefix_warns(wert: str = "ArchCustom") -> None:
+@pytest.mark.parametrize("wert", ["ArchCustom", "Archly", "ARCHBOX"])
+def test_an_arch_prefix_warns(wert: str) -> None:
+    """Die Markenrichtlinie verlangt hier eine Warnung -- keine Freigabe.
+
+    Frueher lautete die Zusicherung ``is_warning or ok``; das ist fuer jedes
+    Ergebnis ausser einem harten Fehler wahr. Verschwaende der Validator seine
+    Warnung, waere der Test gruen geblieben.
+    """
     ergebnis = validation.validate("distro_name", wert)
-    assert ergebnis.is_warning or ergebnis.ok, "ein Praefix soll hoechstens warnen"
+    assert ergebnis.is_warning, "ein Arch-Praefix muss warnen"
+    assert "Arch" in ergebnis.message
 
 
 @pytest.mark.parametrize("wert", ["FLOS", "MeineDistro", "Test 1"])

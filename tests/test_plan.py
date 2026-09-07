@@ -154,7 +154,23 @@ def test_plan_warns_when_packages_could_not_be_checked(catalog, resolver, deskto
 
 
 def test_plan_text_contains_no_secrets(catalog, resolver, desktop_config) -> None:
+    """Der Bauplan darf kein Passwort enthalten -- geprueft am echten Wert.
+
+    Die frueher hier stehende Oder-Bedingung war bereits erfuellt, sobald der
+    Text das Wort 'passwort' klein geschrieben enthielt. Sie prueft ein Wort,
+    kein Geheimnis. Hier wird stattdessen ein echtes Passwort gesetzt und der
+    Klartext gesucht.
+    """
+    from archcustomiser.core.secrets import SecretStore
+
+    geheim = "streng-geheim-77"
+    secrets = SecretStore()
+    secrets.set("user.password", geheim)
+    desktop_config.set_field("user.username", "jason")
+
     plan = build_plan(catalog, desktop_config, resolver.resolve(desktop_config))
     text = plan_as_text(plan)
-    assert "passwort" not in text.lower() or "Passwort" not in text
+
+    assert geheim not in text
+    assert geheim not in repr(plan)
     assert "flos-1.0-x86_64.iso" in text
