@@ -192,6 +192,18 @@ class FieldSpec:
     visible_when: Predicate = ALWAYS
     enabled_when: Predicate = ALWAYS
     confirm_field: str = ""       # Passwortwiederholung
+    preview_role: str = ""
+    """Wofuer dieses Feld in einer Live-Vorschau steht.
+
+    Die Oberflaeche soll das Branding zeigen, waehrend man es
+    eintippt -- ohne dafuer die Kategorie 'branding' oder das Feld
+    'distro_name' namentlich zu kennen. Der Katalog sagt deshalb
+    selbst, welche Rolle ein Feld spielt ('name', 'logo', 'splash');
+    die Vorschau fragt nach Rollen, nicht nach Feldnamen.
+
+    Dasselbe Muster wie ``choices_from`` und ``validator``: ein Name,
+    den eine Registry in der Oberflaeche aufloest.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -286,6 +298,14 @@ class Category:
     visible_when: Predicate = ALWAYS
     renamed_from: tuple[str, ...] = ()
     source_files: tuple[str, ...] = ()
+    preview: str = ""
+    """Name einer Vorschau in der Oberflaeche, oder leer.
+
+    Erlaubt eine Live-Vorschau neben dem Formular, ohne dass die
+    Oberflaeche eine Kategorie namentlich kennt. Ist der Name dort
+    unbekannt, erscheint keine Vorschau -- der Katalog bleibt
+    ladbar.
+    """
 
     def option(self, option_id: str) -> Option | None:
         for option in self.options:

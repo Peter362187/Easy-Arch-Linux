@@ -29,10 +29,15 @@ category:
   step: 85
   page_type: form
   icon: "brush"
+  # Die Oberflaeche zeigt daneben eine Live-Vorschau. Welche Vorschau das
+  # ist, sagt der Katalog -- die GUI kennt weder diese Kategorie noch eines
+  # ihrer Felder namentlich.
+  preview: "iso_branding"
 
 fields:
 
   - id: distro_name
+    preview_role: "name"
     label: "Name der Distribution"
     widget: line
     default: "CustomArch"
@@ -45,6 +50,7 @@ fields:
       nach der Arch-Markenrichtlinie nicht zulaessig.
 
   - id: version
+    preview_role: "version"
     label: "Version"
     widget: line
     default: "1.0"
@@ -71,12 +77,14 @@ fields:
       Kleinbuchstaben und Ziffern, maximal 30 Zeichen (von mkarchiso geprueft).
 
   - id: publisher
+    preview_role: "publisher"
     label: "Herausgeber"
     widget: line
     placeholder: "z.B. Jason <jason@example.org>"
     help: "Wird als ISO-Metadatum hinterlegt."
 
   - id: logo
+    preview_role: "logo"
     label: "Logo"
     widget: path
     file_filter: "Bilder (*.png *.svg)"
@@ -84,6 +92,7 @@ fields:
     help: "Wird als Systemlogo hinterlegt und von fastfetch angezeigt."
 
   - id: wallpaper
+    preview_role: "wallpaper"
     label: "Desktop-Hintergrund"
     widget: path
     file_filter: "Bilder (*.png *.jpg *.jpeg)"
@@ -91,6 +100,7 @@ fields:
     help: "Landet in /etc/skel und gilt damit auch im spaeter installierten System."
 
   - id: splash
+    preview_role: "splash"
     label: "Hintergrundbild des Bootmenues"
     widget: path
     file_filter: "PNG-Bilder (*.png)"
@@ -111,6 +121,7 @@ fields:
     validator: url
 
   - id: boot_menu_title
+    preview_role: "menu_title"
     label: "Titel im Bootmenue"
     widget: line
     placeholder: "wird aus Name und Version abgeleitet"

@@ -336,6 +336,7 @@ _FIELD_KEYS = frozenset(
         "visible_when",
         "enabled_when",
         "confirm_field",
+        "preview_role",
     }
 )
 
@@ -382,6 +383,7 @@ def _parse_fields(raw: Any, category_id: str, where: str) -> tuple[FieldSpec, ..
                 visible_when=_predicate(data, "visible_when", spot),
                 enabled_when=_predicate(data, "enabled_when", spot),
                 confirm_field=_str(data, "confirm_field", spot),
+                preview_role=_str(data, "preview_role", spot),
             )
         )
     return tuple(result)
@@ -488,6 +490,7 @@ _CATEGORY_KEYS = frozenset(
         "visible_when",
         "groups",
         "renamed_from",
+        "preview",
     }
 )
 
@@ -690,6 +693,7 @@ def _parse_category(raw: _RawCategory) -> Category:
         fields=fields,
         visible_when=_predicate(header, "visible_when", where),
         renamed_from=_str_tuple(header, "renamed_from", where),
+        preview=_str(header, "preview", where),
         source_files=tuple(raw.sources),
     )
 
