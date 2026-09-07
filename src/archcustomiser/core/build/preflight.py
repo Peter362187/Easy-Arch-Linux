@@ -470,7 +470,54 @@ def run_wsl_preflight(
             str(out_dir) if writable else f"Keine Schreibrechte in {probe}.",
         )
     )
+
+    # Es muss aber auch aus der Verteilung heraus erreichbar sein: die fertige
+    # ISO wird mit 'cp' innerhalb von Linux dorthin kopiert. Auf einem
+    # Netzlaufwerk oder einem UNC-Pfad scheitert 'wslpath' -- frueher erst in
+    # fetch_iso, also nach zwanzig bis sechzig Minuten Bauzeit. Die ISO lag
+    # dann nur noch in der virtuellen Platte.
+    if writable:
+        report.checks.append(_wsl_ausgabe_erreichbar(wsl_target, out_dir))
+
     return report
+
+
+def _wsl_ausgabe_erreichbar(wsl_target, out_dir: Path) -> Check:
+    """Prueft, ob die Verteilung das Ausgabeverzeichnis sieht."""
+    from .wsl import WslError
+
+    try:
+        linux_pfad = wsl_target.to_linux_path(out_dir)
+    except WslError as exc:
+        return Check(
+            "Ausgabeverzeichnis in Linux",
+            False,
+            f"{out_dir} ist aus der Linux-Verteilung nicht erreichbar. Das "
+            f"trifft Netzlaufwerke und UNC-Pfade. Bitte ein Verzeichnis auf "
+            f"einem lokalen Laufwerk waehlen. ({exc.user_message})",
+        )
+    except Exception:
+        log.debug("Erreichbarkeit des Ausgabeverzeichnisses unklar", exc_info=True)
+        return Check(
+            "Ausgabeverzeichnis in Linux",
+            True,
+            "nicht pruefbar -- der Bau versucht es trotzdem",
+            fatal=False,
+        )
+
+    ergebnis = wsl_target.run(["test", "-d", "--", linux_pfad])
+    if not ergebnis.ok:
+        # 'test -d --' kennt nicht jede Shell; ohne -- noch einmal versuchen.
+        ergebnis = wsl_target.run(["test", "-d", linux_pfad])
+    if not ergebnis.ok:
+        return Check(
+            "Ausgabeverzeichnis in Linux",
+            False,
+            f"{out_dir} liegt fuer die Verteilung unter {linux_pfad}, dort ist "
+            f"es aber nicht auffindbar. Meist ist das Laufwerk nicht "
+            f"eingehaengt (wsl.conf, automount).",
+        )
+    return Check("Ausgabeverzeichnis in Linux", True, linux_pfad, fatal=False)
 
 
 def run_container_preflight(

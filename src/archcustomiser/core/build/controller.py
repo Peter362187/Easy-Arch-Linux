@@ -49,6 +49,12 @@ log = logging.getLogger(__name__)
 # Wandert mit der Profilablage ins Ziel -- hier nur noch weitergereicht.
 PROFILE_DIRNAME = targets_module.PROFILE_DIRNAME
 
+# Wie lange der Bau-Faden auf das Ende des Abbruchs wartet, bevor er aufraeumt.
+# Beim WSL-Ziel kostet ein Abbruch die Frist plus mehrere pkill-Aufrufe mit je
+# 30 s Zeitlimit; laenger als zwei Minuten darf das Aufraeumen aber nicht
+# blockieren, sonst steht die Oberflaeche auf "Wird abgebrochen ...".
+CANCEL_WAIT_SECONDS = 120.0
+
 
 class Step(str, Enum):
     PREFLIGHT = "preflight"
@@ -118,6 +124,17 @@ class BuildController:
         self._output_fetched = False
         self._runner: MkarchisoRunner | None = None
         self._cancelled = False
+        # Gesetzt heisst: es laeuft gerade kein Abbruch. cancel() loescht das
+        # Ereignis, bevor es den Merker setzt, und setzt es am Ende wieder --
+        # der Bau-Faden wartet dazwischen, bevor er aufraeumt. Sonst loescht er
+        # unter der laufenden Nachkontrolle weg, und die haelt das eigene
+        # Aufraeum-rm fuer einen ueberlebenden Bauprozess.
+        #
+        # Anfangs gesetzt: ein BuildCancelled ohne vorherigen cancel()-Aufruf
+        # (der Runner kann es selbst werfen) darf nicht auf ein Ereignis
+        # warten, das niemand mehr setzt.
+        self._cancel_done = threading.Event()
+        self._cancel_done.set()
         # Dieselbe Ueberlegung wie im Runner: zwischen "Runner bauen" und
         # "Runner eintragen" darf kein Abbruch verlorengehen.
         self._lock = threading.Lock()
@@ -224,9 +241,19 @@ class BuildController:
             # Bei einem Bau in WSL liegt die ISO noch drueben. Erst nach dem
             # Holen gibt es einen Pfad auf diesem Rechner.
             if result.iso_location:
-                result.iso_path = self.target.fetch_iso(
-                    result.iso_location, out_dir / profile.iso_filename
-                )
+                # Das Kopieren dauert bei 2,5 GB Minuten. Ein Abbruch trifft
+                # dabei das cp -- und hinterliess frueher eine abgeschnittene
+                # Datei unter dem erwarteten ISO-Namen, gemeldet als
+                # "fehlgeschlagen" statt "abgebrochen".
+                self._check_cancel()
+                try:
+                    result.iso_path = self.target.fetch_iso(
+                        result.iso_location, out_dir / profile.iso_filename
+                    )
+                except BuildError:
+                    self._check_cancel()
+                    raise
+                self._check_cancel()
                 # Erst jetzt darf die Kopie drueben weg.
                 self._output_fetched = True
             outcome.result = result
@@ -241,6 +268,14 @@ class BuildController:
             # Vor dem Werfen noch aufraeumen. Frueher wurde Schritt 5 bei einem
             # Abbruch uebersprungen -- ausgerechnet in dem Fall, in dem am
             # meisten liegenbleibt.
+            #
+            # Zuerst aber warten, bis cancel() fertig ist. Beide laufen in
+            # getrennten Faeden: sobald pkill den Bau beendet, kehrt der
+            # Bau-Faden zurueck und beginnt mit 'rm -rf <arbeitsverzeichnis>'.
+            # Das Kill-Muster ist genau dieser Pfad -- die Nachkontrolle sah
+            # also das eigene Aufraeum-rm, eskalierte auf KILL und liess ein
+            # halb geloeschtes Verzeichnis zurueck.
+            self._cancel_done.wait(timeout=CANCEL_WAIT_SECONDS)
             if self._paths is not None:
                 try:
                     self._cleanup_all(self._paths, keep_work_dir=keep_work_dir)
@@ -249,6 +284,31 @@ class BuildController:
             outcome.log_path = self._write_log(outcome, cancelled=True)
             raise
         except (BuildError, ProfileError) as exc:
+            # Frueher wurde hier nur das Protokoll geschrieben. Ein in
+            # mksquashfs gescheiterter Bau hinterliess damit 10 bis 30 GB
+            # Arbeitsverzeichnis -- bei WSL in der virtuellen Platte, die nur
+            # waechst. Die Vorabpruefung meldete das beim naechsten Mal als
+            # "Reste frueherer Bauten": ein Symptom genau dieser Luecke.
+            #
+            # Wer den Zustand untersuchen will, setzt keep_work_dir in der
+            # Vorabpruefung; das Profilverzeichnis wandert dann ebenfalls nicht.
+            if self._paths is not None:
+                try:
+                    self._cleanup_all(self._paths, keep_work_dir=keep_work_dir)
+                except Exception:
+                    log.debug("Aufraeumen nach Fehlschlag fehlgeschlagen", exc_info=True)
+            outcome.log_path = self._write_log(outcome, error=exc)
+            raise
+        except Exception as exc:
+            # Ein Ziel darf eine unerwartete Ausnahme werfen -- ContainerError
+            # etwa erbt nicht von BuildError, ebenso die ValueError aus wrap()
+            # und prepare(). Ohne diesen Zweig verliesse sie run() ohne
+            # Protokoll und ohne Aufraeumen.
+            if self._paths is not None:
+                try:
+                    self._cleanup_all(self._paths, keep_work_dir=keep_work_dir)
+                except Exception:
+                    log.debug("Aufraeumen nach Fehlschlag fehlgeschlagen", exc_info=True)
             outcome.log_path = self._write_log(outcome, error=exc)
             raise
         else:
@@ -257,14 +317,24 @@ class BuildController:
             )
             return outcome
         finally:
-            self._runner = None
+            with self._lock:
+                self._runner = None
 
     def cancel(self) -> None:
+        # Erst das Ereignis loeschen, dann den Merker setzen: sonst sieht der
+        # Bau-Faden den Merker in genau dem Fenster dazwischen und raeumt auf,
+        # waehrend die Nachkontrolle noch laeuft.
+        self._cancel_done.clear()
         self._cancelled = True
-        with self._lock:
-            runner = self._runner
-        if runner is not None:
-            runner.cancel()
+        try:
+            with self._lock:
+                runner = self._runner
+            if runner is not None:
+                runner.cancel()
+        finally:
+            # Auch bei einem Fehler im Abbruch: der Bau-Faden darf nicht
+            # unbegrenzt warten.
+            self._cancel_done.set()
 
     @property
     def cancelled(self) -> bool:

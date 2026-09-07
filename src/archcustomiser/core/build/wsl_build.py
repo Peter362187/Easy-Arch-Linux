@@ -121,6 +121,16 @@ def transfer_profile(
         count = check.stdout.strip()
         expected = tree.symlink_count
         log.info("Profil ausgepackt: %s Verknuepfungen (erwartet %d)", count, expected)
+        if expected and not (check.ok and count.isdigit()):
+            # Genau der Fall, den die Gegenprobe abfangen soll: schlaegt der
+            # find-Aufruf fehl oder liefert er nichts, galt die Uebertragung
+            # bisher stillschweigend als in Ordnung.
+            raise WslError(
+                "Nach dem Auspacken liess sich nicht pruefen, ob die "
+                "symbolischen Verknuepfungen angekommen sind. Ohne sie "
+                "liessen sich die Systemdienste im Abbild nicht aktivieren.",
+                f"find-Ausgabe={count!r} rueckgabewert={check.returncode}",
+            )
         if count.isdigit() and expected and int(count) < expected:
             raise WslError(
                 "Beim Uebertragen sind symbolische Verknuepfungen verlorengegangen. "
@@ -156,11 +166,39 @@ def cleanup(
     """
     targets = [str(paths.profile)]
     if not keep_work_dir:
+        _loese_einhaengungen(target, paths)
         targets.append(str(paths.work))
     if remove_output:
         targets.append(str(paths.out))
     for path in targets:
-        result = target.run(["rm", "-rf", "--", path], timeout=600.0)
+        # --one-file-system: rm steigt sonst in eine noch eingehaengte
+        # Dateisystemgrenze ab. Bei einem abgebrochenen pacstrap koennen unter
+        # work/x86_64/airootfs noch proc, sys, devtmpfs, devpts, tmpfs und ein
+        # Bind auf /run liegen -- ein rm -rf als root loescht dann Geraeteknoten
+        # in /dev und den Inhalt von /run der Verteilung.
+        result = target.run(
+            ["rm", "-rf", "--one-file-system", "--", path], timeout=600.0
+        )
         if not result.ok:
             log.warning("%s liess sich in WSL nicht loeschen: %s", path, result.stderr.strip())
+
+
+def _loese_einhaengungen(target: WslTarget, paths: WslPaths) -> None:
+    """Haengt aus, was ein abgebrochener pacstrap hinterlassen hat.
+
+    ``pacstrap`` haengt acht Dateisysteme in den Zielbaum ein und loest sie in
+    einer EXIT-Falle wieder. Beim Abbruch bekommen mkarchiso, pacstrap und
+    pacman gleichzeitig ein Signal; laeuft pacman noch, scheitert das
+    Aushaengen mit EBUSY und die Einhaengungen bleiben stehen.
+
+    Fehler werden bewusst nur protokolliert: ist nichts eingehaengt, meldet
+    ``umount`` das als Fehler, und ein Aufraeumen darf daran nicht scheitern.
+    Wirkt es nicht, faengt ``--one-file-system`` beim Loeschen den Rest ab.
+    """
+    wurzel = f"{paths.work}/x86_64/airootfs"
+    ergebnis = target.run(["umount", "-R", "--", wurzel], as_root=True, timeout=120.0)
+    if not ergebnis.ok:
+        log.debug(
+            "Nichts auszuhaengen unter %s (%s)", wurzel, ergebnis.stderr.strip()
+        )
 

@@ -161,6 +161,39 @@ class ExecutionTarget(Protocol):
         """
 
 
+def _verlangt_eigenes_profil(pfad: Path) -> None:
+    """Bricht ab, wenn unter ``pfad`` etwas Fremdes liegt.
+
+    ``deliver_profile`` und ``discard`` loeschen rekursiv. Das Arbeits-
+    verzeichnis stammt aber aus einem Eingabefeld; der Validator ``writable_dir``
+    laesst jedes beschreibbare Verzeichnis zu, und die Vorabpruefung meldet ein
+    nicht leeres Verzeichnis nur als Hinweis. Ein versehentlich angegebener
+    Ordner mit eigenen Dateien war damit verloren.
+
+    Als "eigenes" gilt, was leer ist, den Marker der Senke traegt oder wie ein
+    archiso-Profil aussieht (profiledef.sh plus airootfs) -- dieselbe Regel wie
+    in ``DirectorySink._check_target``, nur hier vor dem Loeschen statt vor dem
+    Schreiben.
+    """
+    from ..archiso.errors import TargetNotEmptyError
+    from ..archiso.sinks import MARKER_NAME, looks_like_ours
+
+    if not pfad.is_dir():
+        return
+    try:
+        inhalt = list(pfad.iterdir())
+    except OSError:
+        return
+    if not inhalt:
+        return
+    if (pfad / MARKER_NAME).is_file() or looks_like_ours(pfad):
+        return
+    # 'work' legt mkarchiso selbst an; dort steht nichts vom Benutzer.
+    if pfad.name == "work" and (pfad / "x86_64").exists():
+        return
+    raise TargetNotEmptyError(str(pfad))
+
+
 class LocalTarget:
     """Der Normalfall: mkarchiso laeuft auf diesem Rechner."""
 
@@ -238,6 +271,12 @@ class LocalTarget:
 
         profile_dir = Path(paths.profile)
         if profile_dir.exists():
+            # Nicht blind loeschen: work_dir kommt aus einem Eingabefeld, und
+            # der Validator laesst jedes beschreibbare Verzeichnis zu. Wer dort
+            # versehentlich einen Ordner mit eigenen Dateien angibt, verlor
+            # deren Inhalt -- die Vorabpruefung meldet ein nicht leeres
+            # Verzeichnis nur als Hinweis.
+            _verlangt_eigenes_profil(profile_dir)
             shutil.rmtree(profile_dir, ignore_errors=True)
         DirectorySink(profile_dir, iso_name=iso_name, force=True).write(
             tree,
@@ -261,6 +300,7 @@ class LocalTarget:
             if not pfad.exists():
                 continue
             try:
+                _verlangt_eigenes_profil(pfad)
                 shutil.rmtree(pfad)
                 log.info("Aufgeraeumt: %s", pfad)
             except OSError as exc:
@@ -285,8 +325,21 @@ class LocalTarget:
             return
         try:
             process.terminate()
-        except OSError:
-            return
+        except OSError as exc:
+            # Bei privilege_mode='pkexec' laeuft mkarchiso als root; ein
+            # unprivilegierter Prozess darf es nicht signalisieren und bekam
+            # hier EPERM -- kommentarlos verschluckt. Die Oberflaeche zeigte
+            # danach dauerhaft "Wird abgebrochen ...", der Abbrechen-Knopf war
+            # gesperrt und der Dialog liess sich nicht schliessen: der Benutzer
+            # war fuer die restliche Bauzeit eingesperrt.
+            log.warning("Der Bauprozess liess sich nicht beenden: %s", exc)
+            if self._kill_privileged(process):
+                return
+            raise BuildError(
+                "Der laufende Bau liess sich nicht beenden. Er wurde mit "
+                "erweiterten Rechten gestartet und laeuft weiter.",
+                f"terminate() scheiterte: {exc}",
+            ) from exc
         try:
             process.wait(timeout=grace_seconds)
             return
@@ -298,8 +351,40 @@ class LocalTarget:
         )
         try:
             process.kill()
-        except OSError:
-            pass
+        except OSError as exc:
+            log.warning("Hartes Beenden scheiterte: %s", exc)
+            self._kill_privileged(process, signal="KILL")
+
+    def _kill_privileged(self, process, *, signal: str = "TERM") -> bool:
+        """Ein als root laufender Bau laesst sich nur mit Rechten beenden.
+
+        Der Weg ueber ``pkexec kill`` loest eine zweite Polkit-Abfrage aus --
+        laestig, aber die Alternative ist ein Bau, der eine Stunde weiterlaeuft,
+        waehrend die Oberflaeche "Abgebrochen" meldet. Fehlt pkexec, wird
+        ehrlich False geliefert statt still zu schweigen.
+        """
+        pkexec = shutil.which("pkexec")
+        if pkexec is None:
+            return False
+        try:
+            ergebnis = subprocess.run(
+                [pkexec, "kill", f"-{signal}", "--", str(process.pid)],
+                capture_output=True,
+                timeout=60.0,
+                check=False,
+                shell=False,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            log.warning("pkexec kill fehlgeschlagen: %s", exc)
+            return False
+        if ergebnis.returncode != 0:
+            log.warning(
+                "pkexec kill meldet %s: %s",
+                ergebnis.returncode,
+                ergebnis.stderr.decode("utf-8", errors="replace").strip(),
+            )
+            return False
+        return True
 
 
 class WslExecutionTarget:

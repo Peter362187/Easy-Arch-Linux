@@ -137,6 +137,18 @@ def test_detect_reports_a_missing_subsystem(monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 
 
+def wsl_paths(wurzel: str = "/home/jason/.cache/archcustomiser/flos"):
+    """Die Verzeichnisse eines Baus in der Verteilung."""
+    from archcustomiser.core.build.wsl_build import WslPaths
+
+    return WslPaths(
+        root=PurePosixPath(wurzel),
+        profile=PurePosixPath(wurzel + "/profile"),
+        work=PurePosixPath(wurzel + "/work"),
+        out=PurePosixPath(wurzel + "/out"),
+    )
+
+
 class FakeWsl:
     """Ersetzt ``WslTarget`` und zeichnet jede Argumentliste auf."""
 
@@ -149,7 +161,7 @@ class FakeWsl:
     def wrap(self, argv):
         return ["wsl.exe", "-d", self.distribution, "-e", *[str(a) for a in argv]]
 
-    def run(self, argv, *, timeout: float = 60.0) -> wsl.WslResult:
+    def run(self, argv, *, timeout: float = 60.0, as_root: bool = False) -> wsl.WslResult:
         arguments = tuple(str(a) for a in argv)
         self.calls.append(arguments)
         for key, value in self.responses.items():
@@ -669,3 +681,53 @@ def test_utf16_detection_survives_non_latin_messages() -> None:
     # Der umgekehrte Fall muss weiterhin stimmen: UTF-8 bleibt UTF-8.
     deutsch = "Die Verteilung wurde nicht gefunden."
     assert wsl._decode_management(deutsch.encode("utf-8")) == deutsch
+
+
+def test_cleanup_unmounts_before_deleting() -> None:
+    """Ein abgebrochener pacstrap laesst acht Einhaengungen zurueck.
+
+    Ein 'rm -rf' als root steigt dort hinein und loescht Geraeteknoten in /dev
+    und den Inhalt von /run der Verteilung. Deshalb zuerst umount -R, und das
+    Loeschen mit --one-file-system als zweite Sicherung.
+    """
+    from archcustomiser.core.build.wsl_build import cleanup
+
+    fake = FakeWsl()
+    pfade = wsl_paths()
+    cleanup(fake, pfade, keep_work_dir=False)
+
+    reihenfolge = [" ".join(argv) for argv in fake.calls]
+    umount = next((i for i, z in enumerate(reihenfolge) if z.startswith("umount")), None)
+    loeschen = next(
+        (i for i, z in enumerate(reihenfolge) if "rm -rf" in z and str(pfade.work) in z),
+        None,
+    )
+    assert umount is not None, "es wird nicht ausgehaengt"
+    assert loeschen is not None
+    assert umount < loeschen, "erst loeschen, dann aushaengen -- falsche Reihenfolge"
+    assert all(
+        "--one-file-system" in z for z in reihenfolge if z.startswith("rm -rf")
+    ), "rm steigt weiterhin ueber Dateisystemgrenzen"
+
+
+def test_a_failing_symlink_check_is_not_silently_accepted(tmp_path) -> None:
+    """Die Gegenprobe griff nur, wenn find ueberhaupt eine Zahl lieferte.
+
+    Schlug der Aufruf fehl, galt die Uebertragung stillschweigend als in
+    Ordnung -- genau der Fall, den die Pruefung abfangen soll.
+    """
+    from archcustomiser.core.build.wsl_build import transfer_profile
+
+    baum = ProfileTree()
+    baum.add_file("profiledef.sh", "# leer", origin="test")
+    baum.add_symlink(
+        "airootfs/etc/systemd/system/x.service", "/usr/lib/systemd/system/x.service",
+        origin="test",
+    )
+
+    fake = FakeWsl()
+    fake.responses = {"find": wsl.WslResult(1, "", "find: kein Zugriff")}
+
+    with pytest.raises(wsl.WslError) as info:
+        transfer_profile(fake, baum, wsl_paths(), "flos")
+    assert "pruefen" in info.value.user_message

@@ -31,6 +31,22 @@ from .tree import ProfileTree
 log = logging.getLogger(__name__)
 
 MARKER_NAME = ".archcustomiser-profile"
+
+
+def looks_like_ours(verzeichnis: Path) -> bool:
+    """Ob ein Verzeichnis ein von diesem Programm erzeugtes Profil ist.
+
+    Der Marker ist das sichere Kennzeichen; die zweite Bedingung faengt
+    Profile aus einer frueheren Fassung ab, die ihn noch nicht trugen.
+
+    Die Funktion steht hier auf Modulebene, weil auch ``build/targets.py`` sie
+    braucht: dort wird vor dem rekursiven Loeschen geprueft, nicht vor dem
+    Schreiben.
+    """
+    return (verzeichnis / MARKER_NAME).is_file() or (
+        (verzeichnis / "profiledef.sh").is_file()
+        and (verzeichnis / "airootfs").is_dir()
+    )
 PROGRESS_STEP = 25
 
 ProgressCallback = Callable[[int, int], None]   # (erledigt, gesamt)
@@ -102,11 +118,7 @@ class DirectorySink:
         if self.force:
             return
 
-        looks_like_ours = (self.target / MARKER_NAME).is_file() or (
-            (self.target / "profiledef.sh").is_file()
-            and (self.target / "airootfs").is_dir()
-        )
-        if not looks_like_ours:
+        if not looks_like_ours(self.target):
             raise TargetNotEmptyError(str(self.target), len(entries))
 
     def _materialise(
