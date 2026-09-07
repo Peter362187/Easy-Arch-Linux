@@ -50,26 +50,39 @@ options:
     repos: [multilib]
     requires: [drivers.mesa]
 
+  # Arch hat am 20.12.2025 auf die offenen Kernelmodule umgestellt:
+  # nvidia -> nvidia-open, nvidia-lts -> nvidia-open-lts,
+  # nvidia-dkms -> nvidia-open-dkms. Den proprietaeren Modulzweig gibt es in
+  # den offiziellen Repositories nicht mehr; die alten Namen standen hier bis
+  # zum 07.09.2026 und liessen den Bau mit "nicht gefunden" scheitern.
   - id: nvidia
     order: 20
-    label: "NVIDIA (proprietaer)"
+    label: "NVIDIA (offenes Kernelmodul)"
     description: >-
-      Proprietaerer NVIDIA-Treiber. Die Variante richtet sich nach dem gewaehlten
-      Kernel und wird automatisch passend gesetzt.
+      NVIDIA-Treiber mit dem offenen Kernelmodul. Die Variante richtet sich nach
+      dem gewaehlten Kernel und wird automatisch passend gesetzt.
+      Unterstuetzt werden Turing und neuer, also RTX 20xx, GTX 16xx und alles
+      danach. Aeltere Karten (GTX 10xx und darunter) bedient dieser Treiber
+      nicht mehr -- fuer sie gibt es in den offiziellen Repositories keinen
+      NVIDIA-Treiber; nimm dort die offene Mesa-Option.
     packages:
-      - name: nvidia
+      - name: nvidia-open
         when: "kernel.linux"
         reason: "Treibermodul fuer den Standard-Kernel"
-      - name: nvidia-lts
+      - name: nvidia-open-lts
         when: "kernel.linux-lts"
         reason: "Treibermodul fuer den LTS-Kernel"
-      - name: nvidia-dkms
+      - name: nvidia-open-dkms
         when: "kernel.linux-zen"
         reason: "Zen hat kein vorgebautes Modul, deshalb DKMS"
       - nvidia-utils
       - nvidia-settings
     semantics:
-      profile_config.gfx_driver: "Nvidia (proprietary)"
+      # Wert aus dem GfxDriver-Enum von archinstall. Keine freie Zeichenkette:
+      # ein unbekannter Wert laesst archinstall die GANZE Konfiguration
+      # verwerfen. "Nvidia (proprietary)" stand hier frueher und existiert im
+      # Enum inzwischen gar nicht mehr.
+      profile_config.gfx_driver: "Nvidia (open kernel module for newer GPUs, Turing+)"
 
   - id: intel-media
     order: 30

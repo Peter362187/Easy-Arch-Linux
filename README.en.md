@@ -199,12 +199,30 @@ This distinction belongs in the documentation, not in the small print:
 | CPU limit during a build | **measured on real hardware**: mksquashfs reports 6 threads instead of 12 |
 | Profile generation and export | covered by tests and in use |
 | ISO build directly on Arch | covered by tests, not run on real hardware |
-| **ISO build in a container** | **calls covered by tests, never run on a real Ubuntu, Fedora or Mac** |
+| **ISO build in a container** | **a real ISO was built**, 1311 MB, with podman on a real Linux |
+| Container using docker instead of podman | not run |
+| Container on Fedora (SELinux `:Z` labelling) | not run |
+| Container on macOS | not run |
 | Boot test of the finished ISO | outstanding |
 
-The container path is carefully built and follows what Arch does for its own
-ISOs — but "should work" is not the same as "works". Reports from real systems
-are welcome.
+**About the container path, precisely.** On 2026-09-07 it ran for real for the
+first time — podman 6.1 on a real Linux kernel, through the same interface the
+"build ISO" button uses. The resulting ISO is 1311 MB, carries the ISO-9660
+signature `CD001`, the MBR signature `0x55AA` and the volume label
+`MINIARCH_1_0` — byte for byte the same result as the WSL path.
+
+That run exposed four bugs nobody could have seen before, because the tests
+check the *shape* of the calls and not their *effect*: the Containerfile never
+reached the engine, nothing ever called `ensure_image()`, docker was always
+declared dead, and the image was missing `grub`.
+
+The central question was measured too: with `--privileged`, mounting
+`devtmpfs`, `proc`, `sysfs` and `tmpfs` all succeed; without it `devtmpfs`
+fails. So `--privileged` is a necessity, not a convenience — and the program
+now checks this itself before starting.
+
+What this does **not** prove: docker as the engine, Fedora's SELinux
+labelling, macOS, or the rootless-podman case. Reports welcome.
 
 ---
 
@@ -225,7 +243,7 @@ The complete documentation is German:
 * **[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)** — architecture, design decisions
   and the reasoning behind them
 
-553 tests, no network and no display required:
+561 tests, no network and no display required:
 
 ```bash
 python -m pytest -q

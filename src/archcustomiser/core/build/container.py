@@ -61,8 +61,16 @@ LOCAL_IMAGE = "localhost/archcustomiser-archiso:latest"
 # Das Abbild einmal bauen und behalten. Die Alternative -- bei jedem Bau
 # "pacman -Sy archiso" im Container -- kostet jedes Mal mehrere hundert MB und
 # einige Minuten, und ohne Netz ginge gar nichts mehr.
+#
+# ``grub`` gehoert dazu, obwohl archiso es nicht mitzieht: der Bootmodus
+# ``uefi.grub`` braucht ``grub-mkstandalone`` (siehe CONDITIONAL_TOOLS in
+# environment.py). Ohne das Paket brach mkarchiso beim ersten echten Lauf am
+# 07.09.2026 mit "grub-install is not available on this host" ab -- und die
+# Vorabpruefung haette dem Benutzer gesagt, er solle das Abbild neu bauen,
+# obwohl genau dieses Abbild dabei wieder ohne grub entstanden waere. Eine
+# Sackgasse fuer zwoelf Megabyte.
 CONTAINERFILE = f"""FROM {BASE_IMAGE}
-RUN pacman -Sy --noconfirm --needed archiso && pacman -Scc --noconfirm
+RUN pacman -Sy --noconfirm --needed archiso grub && pacman -Scc --noconfirm
 """
 
 DEFAULT_TIMEOUT = 120.0
@@ -206,15 +214,38 @@ def detect() -> ContainerStatus:
     status = ContainerStatus(engine=engine, version=version.stdout.strip())
 
     # Laeuft die Engine ueberhaupt? Bei docker heisst das: laeuft der Dienst.
+    #
+    # Die beiden Engines beantworten das in verschiedenen Sprachen. Bis zum
+    # 07.09.2026 stand hier fuer beide "{{.Host.Security.Rootless}}" -- das ist
+    # podman-Vokabular. Dockers info-Vorlage arbeitet auf einer Struktur ohne
+    # Feld "Host", die Vorlage scheitert, docker endet mit einem Fehlercode,
+    # und die Meldung lautete "docker laeuft nicht" -- auch bei laufendem
+    # Dienst. Damit war der Container-Weg auf jedem System, das nur docker hat,
+    # unerreichbar; auf macOS also immer.
+    vorlage = "{{.Host.Security.Rootless}}" if engine == "podman" else "{{.SecurityOptions}}"
     try:
-        info = _run([engine, "info", "--format", "{{.Host.Security.Rootless}}"], timeout=60.0)
+        info = _run([engine, "info", "--format", vorlage], timeout=60.0)
     except ContainerError:
         info = ContainerResult(1)
     if not info.ok:
-        status.problem = f"{engine} laeuft nicht."
-        status.remedy = _start_hint(engine)
-        return status
-    status.rootless = info.stdout.strip().lower() == "true"
+        # Zweiter Versuch ohne Vorlage: scheitert nur die Formatierung, laeuft
+        # die Engine sehr wohl. Eine unbeantwortbare Nebenfrage darf nicht als
+        # "laeuft nicht" durchgehen.
+        try:
+            schlicht = _run([engine, "info"], timeout=60.0)
+        except ContainerError:
+            schlicht = ContainerResult(1)
+        if not schlicht.ok:
+            status.problem = f"{engine} laeuft nicht."
+            status.remedy = _start_hint(engine)
+            return status
+        log.warning("%s beantwortet die Rootless-Frage nicht", engine)
+        status.rootless = False
+    else:
+        antwort = info.stdout.strip().lower()
+        # podman: "true"/"false". docker: eine Liste von Sicherheitsmerkmalen,
+        # in der "name=rootless" steht, wenn der Daemon rootless laeuft.
+        status.rootless = antwort == "true" or "name=rootless" in antwort
 
     try:
         vorhanden = _run([engine, "image", "exists", LOCAL_IMAGE], timeout=60.0)
@@ -305,6 +336,31 @@ class ContainerTarget:
 
     def has_command(self, name: str) -> bool:
         return self.run(["sh", "-c", f"command -v {name} >/dev/null 2>&1"]).ok
+
+    def can_mount_privileged(self) -> bool:
+        """Ob im Container wirklich eingehaengt werden darf. Dauert zwei Sekunden.
+
+        Das ist die Kernbehauptung dieses Moduls, und bis zum 07.09.2026 stand
+        sie als blosse Zusicherung in der Vorabpruefung -- geprueft hat sie
+        niemand. Der Unterschied ist nicht akademisch: laeuft die Engine
+        rootless, gibt ``--privileged`` alle Faehigkeiten nur *innerhalb* des
+        Benutzer-Namensraums, nicht ``CAP_SYS_ADMIN`` im Init-Namensraum. Der
+        Bau lief dann bis pacstrap und scheiterte dort am ersten Mount -- nach
+        Minuten, mit einer Meldung, die niemand deuten kann.
+
+        ``devtmpfs`` ist der richtige Pruefstein: es hat im Kernel kein
+        ``FS_USERNS_MOUNT``-Flag und laesst sich in einem Benutzer-Namensraum
+        grundsaetzlich nicht einhaengen. Gelingt es, gelingt auch der Rest.
+        """
+        befehl = [
+            self.engine, "run", "--rm", "--privileged", self.image,
+            "sh", "-c", "mkdir -p /t && mount -t devtmpfs devtmpfs /t && umount /t",
+        ]
+        try:
+            return self._runner(befehl, timeout=120.0).ok
+        except ContainerError:
+            log.warning("Einhaenge-Probe im Container fehlgeschlagen", exc_info=True)
+            return False
 
     def kill(self, container_name: str, *, signal: str = "TERM") -> ContainerResult:
         return self._runner(

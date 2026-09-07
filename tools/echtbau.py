@@ -1,14 +1,25 @@
 """Fuehrt einen echten ISO-Bau ueber die App-Schnittstelle aus.
 
 Kein Testdouble: derselbe ``BuildController``, den auch der Knopf
-„ISO erstellen" benutzt, mit einem echten WSL-Ziel.
+„ISO erstellen" benutzt, mit einem echten Ziel.
 
 Der Fortschritt wird laufend in eine Datei geschrieben, damit sich ein
 langlaufender Bau von aussen verfolgen laesst, ohne den Prozess zu blockieren.
 
 Aufruf::
 
-    python tools/echtbau.py <profil.yaml> <fortschrittsdatei>
+    python tools/echtbau.py <profil.yaml> <fortschrittsdatei> [--ziel WEG]
+
+``--ziel`` ist ``wsl`` (Vorgabe), ``container`` oder ``lokal``. Das Ziel wird
+ausdruecklich gewaehlt und nicht ermittelt: in einer Arch-Verteilung faende
+``best_target()`` das lokale archiso und nutzte nie den Container -- womit
+sich genau der Weg nicht pruefen liesse, um den es geht.
+
+Mit ``--engine podman|docker`` laesst sich beim Container-Ziel die Engine
+festlegen; ohne Angabe gilt die uebliche Reihenfolge (podman vor docker).
+
+Bewusst hier und nicht in ``__main__.py``: ein Bau von der Kommandozeile ist
+kein zugesagtes Merkmal des Programms, sondern Werkzeug fuer Pruefungen.
 """
 
 from __future__ import annotations
@@ -24,15 +35,51 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 import logging
 
 from archcustomiser.core.build import BuildController
-from archcustomiser.core.build.targets import WslExecutionTarget
-from archcustomiser.core.build.wsl import WslTarget, detect
 from archcustomiser.core.catalog import load_catalog
 from archcustomiser.core.profiles import ProfileService
 from archcustomiser.core.resolver import Resolver
 from archcustomiser.core.secrets import SecretStore
 
 
-def main(profil: Path, fortschritt: Path) -> int:
+def waehle_ziel(name: str, engine: str = ""):
+    """Das Bauziel, ausdruecklich benannt.
+
+    Gibt ein Paar (ziel, fehlermeldung) zurueck; bei Erfolg ist die Meldung
+    leer.
+    """
+    if name == "lokal":
+        from archcustomiser.core.build.targets import LocalTarget
+
+        return LocalTarget(), ""
+
+    if name == "container":
+        from archcustomiser.core.build.container import ContainerTarget, detect
+        from archcustomiser.core.build.targets import ContainerExecutionTarget
+
+        status = detect()
+        if not status.usable:
+            return None, f"{status.problem} {status.remedy}".strip()
+        gewaehlt = engine or status.engine
+        return ContainerExecutionTarget(ContainerTarget(gewaehlt)), ""
+
+    from archcustomiser.core.build.targets import WslExecutionTarget
+    from archcustomiser.core.build.wsl import WslTarget, detect
+
+    status = detect()
+    if not status.usable:
+        return None, "Keine Arch-Verteilung in WSL gefunden"
+    assert status.preferred is not None
+    return WslExecutionTarget(WslTarget(status.preferred.name)), ""
+
+
+def main(
+    profil: Path,
+    fortschritt: Path,
+    zielname: str = "wsl",
+    engine: str = "",
+    arbeit: Path | None = None,
+    ausgabe: Path | None = None,
+) -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)-7s %(name)s: %(message)s")
     zustand: dict[str, object] = {"phase": "start", "anteil": 0.0, "zeilen": 0}
     begonnen = time.time()
@@ -51,12 +98,11 @@ def main(profil: Path, fortschritt: Path) -> int:
     geladen = service.load(profil)
     resolution = Resolver(catalog).resolve(geladen.config)
 
-    status = detect()
-    if not status.usable:
-        schreibe(phase="Fehler", fehler="Keine Arch-Verteilung in WSL gefunden")
+    ziel, fehler = waehle_ziel(zielname, engine)
+    if ziel is None:
+        schreibe(phase="Fehler", fehler=fehler)
         return 2
-    assert status.preferred is not None
-    ziel = WslExecutionTarget(WslTarget(status.preferred.name))
+    schreibe(phase="Ziel gewaehlt", ziel=ziel.name)
 
     secrets = SecretStore()
     secrets.set("user.password", "archcustomiser")
@@ -77,8 +123,9 @@ def main(profil: Path, fortschritt: Path) -> int:
     def anteil(wert: float, titel: str, detail: str) -> None:
         schreibe(anteil=round(wert, 4), phase=titel, detail=detail, zeilen=zaehler["n"])
 
-    arbeit = Path.home() / "archcustomiser" / "work"
-    ausgabe = Path.home() / "archcustomiser" / "out"
+    # Auf einem Bau-Runner liegt der Platz woanders als im Benutzerordner.
+    arbeit = arbeit or Path.home() / "archcustomiser" / "work"
+    ausgabe = ausgabe or Path.home() / "archcustomiser" / "out"
     schreibe(phase="Bau startet", arbeitsverzeichnis=str(arbeit), ausgabe=str(ausgabe))
 
     try:
@@ -111,4 +158,23 @@ def main(profil: Path, fortschritt: Path) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main(Path(sys.argv[1]), Path(sys.argv[2])))
+    import argparse
+
+    zerleger = argparse.ArgumentParser(description="Echter ISO-Bau ueber die App-Schnittstelle")
+    zerleger.add_argument("profil", type=Path)
+    zerleger.add_argument("fortschritt", type=Path)
+    zerleger.add_argument("--ziel", choices=("wsl", "container", "lokal"), default="wsl")
+    zerleger.add_argument("--engine", choices=("podman", "docker"), default="")
+    zerleger.add_argument("--arbeit", type=Path, default=None)
+    zerleger.add_argument("--ausgabe", type=Path, default=None)
+    argumente = zerleger.parse_args()
+    raise SystemExit(
+        main(
+            argumente.profil,
+            argumente.fortschritt,
+            argumente.ziel,
+            argumente.engine,
+            argumente.arbeit,
+            argumente.ausgabe,
+        )
+    )

@@ -235,7 +235,7 @@ Einzelheiten im Abschnitt [Passwort-Hash](#passwort-hash) weiter unten.
 
 ## Tests
 
-553 Tests, ohne Netzwerk und ohne Bildschirm.
+561 Tests, ohne Netzwerk und ohne Bildschirm.
 
 * **`build_fake_syncdb()`** erzeugt echte `tar.gz`-Archive im ALPM-Format, keine
   Attrappen. So fällt eine Formatänderung bei pacman auf.
@@ -484,6 +484,78 @@ anlegen will und das Ziel fehlt. Gegenprobe: das **offizielle
 archiso-Repository** erzeugt beim Entpacken unter Windows exakt dieselben
 Meldungen. Das Archiv ist korrekt; nur das Entpacken gehört auf das
 Linux-System.
+
+---
+
+## Der erste echte Container-Lauf (07.09.2026)
+
+Der Container war der einzige Bauweg, den der Rechner des Autors nicht
+ausführen kann — dort läuft Windows mit einer WSL-Arch-Verteilung. Er stand
+deshalb als „durch Tests belegt, aber nie gelaufen" in der Dokumentation.
+
+Die Lösung war naheliegender als gedacht: **WSL2 ist eine echte VM mit einem
+echten Linux-Kernel.** Ein Container darin ist keine verschachtelte
+Virtualisierung, sondern gewöhnliche Namespace-Trennung — und man ist dort
+root, also ist podman rootful. Genau der Fall, den pacstrap braucht.
+
+Der Lauf in fünf Sprossen, jede für sich abbrechbar:
+
+| # | Was | Gemessen |
+|---|---|---|
+| 0 | Abbild bauen (`build_image()`) | 23 s |
+| 1 | `devtmpfs`, `proc`, `sysfs`, `tmpfs` mit `--privileged` | alle vier OK; **ohne** `--privileged` scheitert `devtmpfs` |
+| 2 | `pacstrap -c /t base` | 25 s, `PACSTRAP-OK` |
+| 3 | `mkarchiso` mit archisos `baseline`-Profil | 1 m 49 s, 489 MB |
+| 4 | Der Programmweg über `BuildController` | 203 s, **1311 MB** |
+
+Sprosse 1 ist die wichtigste: sie entscheidet die Behauptung, um die sich das
+ganze Modul dreht. Die Gegenprobe ohne `--privileged` gehört dazu — ohne sie
+wüsste man nur, dass es geht, nicht ob der Schalter etwas dazu beiträgt.
+
+Die ISO aus Sprosse 4 ist zeichengleich mit der über WSL gebauten: 1311 MB,
+`CD001`, `0x55AA`, `MINIARCH_1_0`.
+
+### Vier Fehler, die nur ein echter Lauf zeigen konnte
+
+Die Attrappentests decken die **Form** der Aufrufe lückenlos ab und ihre
+**Wirkung** überhaupt nicht. Das ist für Attrappen richtig — es heißt nur, dass
+die Testzahl nichts über die Funktionsfähigkeit aussagt.
+
+1. **Das Containerfile erreichte die Engine nie.** `--file -` heißt „von
+   stdin", übergeben wurde nichts. Behoben über ein Wegwerfverzeichnis.
+2. **`ensure_image()` rief niemand.** Ohne Abbild scheitert `podman run` an
+   einem `localhost/`-Namen, der nicht aus dem Netz geholt wird.
+3. **Docker wurde grundsätzlich für tot erklärt.** Die Rootless-Frage stellte
+   `{{.Host.Security.Rootless}}` — podman-Vokabular. Dockers `info` kennt kein
+   Feld `Host`, die Vorlage scheitert, der Rückgabecode ist ungleich null, und
+   die Meldung lautete „docker laeuft nicht". Damit war macOS immer tot.
+   Zwei Lehren stecken darin: je Engine die passende Frage stellen, und eine
+   unbeantwortbare **Neben**frage nie als Ausfall der **Haupt**sache deuten.
+4. **Dem Abbild fehlte `grub`.** archiso zieht es nicht mit, der Bootmodus
+   `uefi.grub` braucht es. Die Vorabprüfung hätte gesagt „das Abbild muss neu
+   gebaut werden" — und dabei wäre wieder eines ohne grub entstanden. Eine
+   Sackgasse für zwölf Megabyte. Ein Test hält jetzt fest, dass alles aus
+   `CONDITIONAL_TOOLS` im Containerfile steht.
+
+### Aus einer Zusicherung wurde eine Prüfung
+
+`can_mount_privileged()` hängt `devtmpfs` im Container ein und wieder aus. Zwei
+Sekunden. `devtmpfs` ist der richtige Prüfstein, weil es im Kernel kein
+`FS_USERNS_MOUNT`-Flag hat und in einem Benutzer-Namensraum grundsätzlich nicht
+einhängbar ist.
+
+Vorher stand an dieser Stelle in der Vorabprüfung eine Behauptung („der
+Container läuft privilegiert"). Auf einem normalen Ubuntu läuft podman als
+normaler Benutzer aber rootless, und dort wirkt `--privileged` nur *innerhalb*
+des Benutzer-Namensraums. Der Bau lief dann bis pacstrap und starb dort am
+ersten Mount — nach Minuten, mit einer Meldung, die niemand deuten kann. Jetzt
+blockiert die Vorabprüfung mit dem Befehl, der hilft.
+
+### Was weiterhin offen ist
+
+docker als Engine, Fedoras SELinux-Kennzeichnung `:Z`, macOS. Der Ablauf unter
+`.github/workflows/container.yml` deckt die ersten beiden Punkte ab, sobald ihn
+jemand auslöst — er läuft bewusst nur auf Knopfdruck.
 
 ---
 

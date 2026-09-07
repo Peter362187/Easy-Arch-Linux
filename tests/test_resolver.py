@@ -141,12 +141,22 @@ def test_services_are_deduplicated_by_owner(resolver) -> None:
 
 
 def test_conditional_package_follows_the_kernel(resolver) -> None:
-    """Der NVIDIA-Treiber muss zum gewaehlten Kernel passen."""
+    """Der NVIDIA-Treiber muss zum gewaehlten Kernel passen.
+
+    Seit dem 20.12.2025 heissen die Pakete nvidia-open, nvidia-open-lts und
+    nvidia-open-dkms; die alten Namen gibt es in den offiziellen Repositories
+    nicht mehr. Die Fallunterscheidung nach Kernel bleibt aber richtig:
+    nvidia-open haengt an linux, nvidia-open-lts an linux-lts, und
+    nvidia-open-dkms an dkms -- deshalb ist es fuer Zen der einzige Weg.
+    """
+    standard = resolver.resolve(make_config("kernel.linux", "drivers.nvidia")).package_names
+    assert "nvidia-open" in standard and "nvidia-open-dkms" not in standard
+
     zen = resolver.resolve(make_config("kernel.linux-zen", "drivers.nvidia")).package_names
-    assert "nvidia-dkms" in zen and "nvidia" not in zen
+    assert "nvidia-open-dkms" in zen and "nvidia-open" not in zen
 
     lts = resolver.resolve(make_config("kernel.linux-lts", "drivers.nvidia")).package_names
-    assert "nvidia-lts" in lts and "nvidia-dkms" not in lts
+    assert "nvidia-open-lts" in lts and "nvidia-open-dkms" not in lts
 
 
 def test_missing_requirement_is_reported_with_a_fix(resolver) -> None:

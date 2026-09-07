@@ -32,15 +32,17 @@ pacman, nicht dieses Programm.
 | 6 | ISO-Build ausführen (`mkarchiso` starten) | fertig |
 | 7 | Logging und Fehlerbehandlung | fertig |
 | 8 | Branding | fertig |
-| 9 | Tests | laufend (553) |
+| 9 | Tests | laufend (561) |
 | 10 | UI/UX und Dokumentation | laufend |
 
 **Der Funktionsumfang ist vollständig:** Wizard, Profile, Paketprüfung, Dry-Run,
 Profilerzeugung und der ISO-Build mit Fortschrittsanzeige, Abbruch und Protokoll.
 
-**Zwei echte ISOs wurden gebaut** (1311 MB und 2525 MB). Der vollständige Ablauf ist über die
-Programmschnittstelle durchlaufen worden — Profil erzeugen, in eine
-WSL-Arch-Verteilung übertragen, `mkarchiso` ausführen, ISO zurückholen:
+**Drei echte ISOs wurden gebaut**, auf zwei verschiedenen Wegen: zwei über WSL
+(1311 MB und 2525 MB) und eine im Container mit podman (1311 MB). Der
+vollständige Ablauf ist jedes Mal über die Programmschnittstelle durchlaufen
+worden — Profil erzeugen, übertragen, `mkarchiso` ausführen, ISO zurückholen.
+Beide Wege liefern für dasselbe Profil dasselbe Ergebnis:
 
 ```
 Datei        : miniarch-1.0-x86_64.iso (1311 MB)
@@ -520,7 +522,7 @@ src/archcustomiser/
 ├── data/catalog/            der gesamte Optionsumfang als YAML
 └── profiles/                mitgelieferte Profile
 
-tests/                       553 Tests, ohne Netz und ohne Bildschirm
+tests/                       561 Tests, ohne Netz und ohne Bildschirm
 tools/                       Hilfsskripte für die Entwicklung
 ArchCustomiser.bat           Doppelklick-Start, richtet sich selbst ein
 ```
@@ -578,9 +580,30 @@ Diese Trennung gehört in die Dokumentation, nicht ins Kleingedruckte:
 | Kerngrenze beim Bau | **auf echter Hardware gemessen**: mksquashfs meldet 6 statt 12 Fäden |
 | Profil-Erzeugung und Export | durch Tests und im Gebrauch belegt |
 | ISO-Bau direkt auf Arch | durch Tests belegt, nicht auf echter Hardware gelaufen |
-| **ISO-Bau im Container** | **Aufrufe durch Tests belegt, aber noch auf keinem echten Ubuntu, Fedora oder Mac gelaufen** |
+| **ISO-Bau im Container** | **echte ISO gebaut**, 1311 MB, mit podman auf einem echten Linux |
+| Container mit docker statt podman | nicht gelaufen |
+| Container auf Fedora (SELinux-Kennzeichnung `:Z`) | nicht gelaufen |
+| Container auf macOS | nicht gelaufen |
 | Boot-Test der fertigen ISO | steht aus |
 
-Der Container-Weg ist sorgfältig gebaut und folgt dem, was Arch für seine
-eigenen ISOs tut — aber „sollte funktionieren" ist nicht dasselbe wie
-„funktioniert". Wer ihn auf einem echten System ausprobiert, möge berichten.
+**Zum Container-Weg, genau gesagt.** Am 07.09.2026 ist er zum ersten Mal
+wirklich gelaufen — mit podman 6.1 auf einem echten Linux-Kernel, über
+dieselbe Schnittstelle, die auch der Knopf „ISO erstellen" benutzt. Die
+entstandene ISO ist 1311 MB groß, trägt die ISO-9660-Signatur `CD001`, die
+MBR-Signatur `0x55AA` und den Datenträgernamen `MINIARCH_1_0` — also
+Zeichen für Zeichen dasselbe Ergebnis wie über den WSL-Weg.
+
+Dabei fielen vier Fehler auf, die vorher niemand sehen konnte, weil die Tests
+die *Form* der Aufrufe prüfen und nicht ihre *Wirkung*: das Containerfile ging
+nie an die Engine, `ensure_image()` rief niemand, docker wurde grundsätzlich
+für tot erklärt, und dem Abbild fehlte `grub`. Genau dafür macht man solche
+Läufe.
+
+Nachgemessen wurde auch die eigentliche Streitfrage: mit `--privileged`
+gelingen `devtmpfs`, `proc`, `sysfs` und `tmpfs`, ohne scheitert `devtmpfs` —
+`--privileged` ist also weder Vorsichtsmaßnahme noch Bequemlichkeit, sondern
+notwendig. Das prüft das Programm jetzt selbst, bevor es losgeht.
+
+Was das **nicht** belegt: docker als Engine, Fedoras SELinux-Kennzeichnung,
+macOS, und den Fall eines rootless laufenden podman. Wer eines davon
+ausprobiert, möge berichten.

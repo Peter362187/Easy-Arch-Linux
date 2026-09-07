@@ -754,8 +754,16 @@ class ContainerExecutionTarget:
 
     # -- Aufruf ---------------------------------------------------------------
     def resolve_executable(self) -> str:
-        # Im Abbild liegt es an der ueblichen Stelle; gepruefte Verfuegbarkeit
-        # ist Sache der Vorabpruefung.
+        """Nachsehen statt behaupten -- so wie es das WSL-Ziel auch macht.
+
+        Der Kommentar hier lautete frueher "gepruefte Verfuegbarkeit ist Sache
+        der Vorabpruefung". Das stimmte nicht: die Vorabpruefung fragt nur nach
+        Werkzeugen fuer bestimmte Bootmodi, nie nach mkarchiso selbst. Ein
+        Abbild ohne archiso -- etwa ein von Hand ueberschriebenes -- fiel
+        deshalb erst beim podman run auf.
+        """
+        if not self.container.has_command("mkarchiso"):
+            raise MkarchisoMissing()
         return "mkarchiso"
 
     def _mount(self, pfad: Path) -> str:

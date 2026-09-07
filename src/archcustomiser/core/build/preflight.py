@@ -473,6 +473,32 @@ def run_wsl_preflight(
     return report
 
 
+def _rootless_remedy(engine: str) -> str:
+    """Was zu tun ist, wenn der Container nicht einhaengen darf.
+
+    Fast immer ist die Ursache dieselbe: die Engine laeuft rootless. Das ist
+    die Vorgabe von podman fuer normale Benutzer und auf den meisten Systemen
+    genau richtig -- nur nicht fuer pacstrap, das echte Mounts braucht.
+    """
+    if engine == "podman":
+        hilfe = (
+            "podman laeuft vermutlich rootless. Der Bau braucht echte "
+            "Einhaengerechte -- entweder mit 'sudo' starten, oder podman "
+            "rootful einrichten."
+        )
+    else:
+        hilfe = (
+            "docker erreicht den Dienst nicht mit den noetigen Rechten. "
+            "Meist hilft, den eigenen Benutzer in die Gruppe 'docker' "
+            "aufzunehmen:\nsudo usermod -aG docker $USER\n"
+            "Danach einmal ab- und wieder anmelden."
+        )
+    return (
+        "Der Container darf nicht einhaengen (nachgeprueft mit devtmpfs). "
+        "pacstrap wuerde mitten im Bau abbrechen.\n" + hilfe
+    )
+
+
 def run_container_preflight(
     container,
     work_dir: Path,
@@ -525,19 +551,48 @@ def run_container_preflight(
     )
 
     # -- Rechte ---------------------------------------------------------------
-    # Ehrlich benennen statt verstecken: der Container laeuft privilegiert, weil
-    # pacstrap acht Dateisysteme einhaengt. Rootless scheitert an devtmpfs, das
-    # im Kernel kein FS_USERNS_MOUNT-Flag hat.
-    report.checks.append(
-        Check(
-            "Rechte",
-            True,
-            "Der Container laeuft privilegiert (--privileged). Das braucht "
-            "pacstrap, um die Paketdatenbank im Abbild aufzubauen; Arch baut "
-            "seine eigenen ISOs genauso.",
-            fatal=False,
+    # Bis zum 07.09.2026 stand hier eine reine Zusicherung: "der Container
+    # laeuft privilegiert". Ob das auf DIESEM System auch reicht, hat niemand
+    # nachgesehen -- und meistens reicht es nicht. Auf einem normalen Ubuntu
+    # laeuft podman als normaler Benutzer rootless, und dort gibt --privileged
+    # alle Faehigkeiten nur innerhalb des Benutzer-Namensraums. Der Bau lief
+    # dann bis pacstrap und starb dort am ersten Mount.
+    #
+    # Die Probe kostet zwei Sekunden, braucht aber das Abbild. Fehlt es noch,
+    # wird nichts behauptet -- die Vorabpruefung darf keine 800 MB laden.
+    if vorhanden:
+        try:
+            darf_einhaengen = container.can_mount_privileged()
+        except ContainerError:
+            darf_einhaengen = False
+        if darf_einhaengen:
+            report.checks.append(
+                Check(
+                    "Rechte",
+                    True,
+                    "Der Container darf einhaengen (nachgeprueft). Das braucht "
+                    "pacstrap, um das System im Abbild aufzubauen; Arch baut "
+                    "seine eigenen ISOs genauso.",
+                )
+            )
+        else:
+            report.checks.append(
+                Check(
+                    "Rechte",
+                    False,
+                    _rootless_remedy(container.engine),
+                )
+            )
+    else:
+        report.checks.append(
+            Check(
+                "Rechte",
+                True,
+                "Der Container laeuft privilegiert (--privileged). Ob das hier "
+                "ausreicht, laesst sich erst mit dem Abbild pruefen.",
+                fatal=False,
+            )
         )
-    )
 
     # -- Host-Fakten: Platz, Dateisystem, Schreibrechte -----------------------
     _check_space(report, work_dir, needed)

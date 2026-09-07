@@ -357,3 +357,170 @@ def test_a_container_error_carries_a_build_log() -> None:
     assert isinstance(fehler, BuildError)
     assert fehler.user_message == "fuer den Benutzer"
     assert fehler.technical == "fuer das Protokoll"
+
+
+# ---------------------------------------------------------------------------
+# Die drei Fehler, die erst beim Planen eines echten Laufs auffielen
+# (07.09.2026). Attrappentests konnten sie nicht finden, weil sie die FORM
+# des Aufrufs pruefen und nicht seine WIRKUNG.
+# ---------------------------------------------------------------------------
+
+
+def test_docker_is_not_declared_dead_when_it_is_running(engine: FakeEngine) -> None:
+    """Die Rootless-Frage wurde in podman-Vokabular gestellt.
+
+    "{{.Host.Security.Rootless}}" ist podman-eigen. Dockers info-Vorlage
+    arbeitet auf einer Struktur ohne Feld "Host": die Vorlage scheitert, docker
+    endet mit einem Fehlercode, und detect() meldete "docker laeuft nicht" --
+    auch bei laufendem Dienst. Auf macOS war der Container-Weg damit immer tot.
+    """
+    from archcustomiser.core.build import container as modul
+
+    aufrufe: list[list[str]] = []
+
+    def docker(argv, timeout=None) -> ContainerResult:
+        argv = [str(i) for i in argv]
+        aufrufe.append(argv)
+        if argv[:2] == ["docker", "--version"]:
+            return ContainerResult(0, stdout="Docker version 28.0.4")
+        if "info" in argv and "--format" in argv:
+            # So verhaelt sich docker bei einer Vorlage, die es nicht kennt.
+            return ContainerResult(1, stderr="template parsing error")
+        if "info" in argv:
+            return ContainerResult(0, stdout="Server Version: 28.0.4")
+        return ContainerResult(1)
+
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(modul, "find_engine", lambda: "docker")
+    monkey.setattr(modul, "_run", lambda argv, timeout=None: docker(argv, timeout))
+    try:
+        status = modul.detect()
+    finally:
+        monkey.undo()
+
+    assert status.engine == "docker"
+    assert not status.problem, f"docker faelschlich fuer tot erklaert: {status.problem}"
+    assert status.usable
+
+
+def test_a_rootless_docker_daemon_is_recognised() -> None:
+    """docker meldet rootless nicht als 'true', sondern in den SecurityOptions."""
+    from archcustomiser.core.build import container as modul
+
+    def docker(argv, timeout=None) -> ContainerResult:
+        """Eine Attrappe, die sich wie docker verhaelt -- nicht wie podman.
+
+        Der Unterschied ist der ganze Punkt: eine Vorlage mit ".Host" kennt
+        docker nicht und quittiert sie mit einem Fehler. Eine Attrappe, die
+        jede Vorlage beantwortet, wuerde den Fehler gar nicht abbilden.
+        """
+        argv = [str(i) for i in argv]
+        if argv[:2] == ["docker", "--version"]:
+            return ContainerResult(0, stdout="Docker version 28.0.4")
+        if "--format" in argv:
+            vorlage = argv[argv.index("--format") + 1]
+            if ".Host" in vorlage:
+                return ContainerResult(1, stderr="template parsing error")
+            return ContainerResult(0, stdout="[name=seccomp,profile=builtin name=rootless]")
+        if "info" in argv:
+            # Ohne Vorlage sagt die Rohausgabe nichts ueber rootless.
+            return ContainerResult(0, stdout="Server Version: 28.0.4")
+        return ContainerResult(1)
+
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(modul, "find_engine", lambda: "docker")
+    monkey.setattr(modul, "_run", lambda argv, timeout=None: docker(argv, timeout))
+    try:
+        status = modul.detect()
+    finally:
+        monkey.undo()
+
+    assert status.rootless, "ein rootless laufender docker blieb unbemerkt"
+
+
+def test_the_mount_probe_uses_devtmpfs(engine: FakeEngine) -> None:
+    """devtmpfs ist der richtige Pruefstein.
+
+    Es hat im Kernel kein FS_USERNS_MOUNT-Flag und laesst sich in einem
+    Benutzer-Namensraum grundsaetzlich nicht einhaengen. Auf dem Rechner des
+    Autors nachgemessen: mit --privileged gelingt es, ohne scheitert es.
+    """
+    ziel = ContainerTarget("podman", runner=engine)
+    assert ziel.can_mount_privileged()
+
+    aufruf = next(argv for argv in engine.calls if "devtmpfs" in " ".join(argv))
+    assert "--privileged" in aufruf, "ohne --privileged sagt die Probe nichts aus"
+    assert "run" in aufruf
+
+
+def test_a_container_that_cannot_mount_is_reported(engine: FakeEngine) -> None:
+    engine.antworten = {"--privileged": ContainerResult(1, stderr="permission denied")}
+    assert not ContainerTarget("podman", runner=engine).can_mount_privileged()
+
+
+def test_the_preflight_blocks_when_mounting_is_impossible(engine: FakeEngine, tmp_path) -> None:
+    """Rootless podman ist die Vorgabe auf jedem normalen Ubuntu.
+
+    Dort gibt --privileged alle Faehigkeiten nur INNERHALB des
+    Benutzer-Namensraums. Der Bau lief bis pacstrap und starb dort am ersten
+    Mount -- nach Minuten, mit einer Meldung, die niemand deuten kann.
+    """
+    from archcustomiser.core.build.preflight import run_container_preflight
+
+    engine.antworten = {
+        "exists": ContainerResult(0),                       # Abbild ist da
+        "--privileged": ContainerResult(1, stderr="operation not permitted"),
+    }
+    bericht = run_container_preflight(
+        ContainerTarget("podman", runner=engine), tmp_path / "work", tmp_path / "out"
+    )
+
+    rechte = [c for c in bericht.checks if c.name == "Rechte"][0]
+    assert not rechte.ok
+    assert rechte.fatal, "ein Bau, der zwangslaeufig scheitert, darf nicht anlaufen"
+    assert "sudo" in rechte.detail, "ohne Abhilfe steht der Benutzer davor"
+
+
+def test_the_preflight_claims_nothing_without_an_image(engine: FakeEngine, tmp_path) -> None:
+    """Ohne Abbild darf nicht geprueft werden -- das lueden 800 MB nach."""
+    from archcustomiser.core.build.preflight import run_container_preflight
+
+    engine.antworten = {"exists": ContainerResult(1)}       # Abbild fehlt
+    bericht = run_container_preflight(
+        ContainerTarget("podman", runner=engine), tmp_path / "work", tmp_path / "out"
+    )
+
+    assert not engine.saw("--privileged"), "die Vorabpruefung hat einen Container gestartet"
+    rechte = [c for c in bericht.checks if c.name == "Rechte"][0]
+    assert rechte.ok and not rechte.fatal
+
+
+def test_a_missing_mkarchiso_in_the_image_is_noticed(engine: FakeEngine, ohne_dateisystem) -> None:
+    """Frueher behauptete das Ziel mkarchiso, ohne nachzusehen."""
+    from archcustomiser.core.build.errors import MkarchisoMissing
+
+    engine.antworten = {"command -v mkarchiso >/dev/null 2>&1": ContainerResult(1)}
+    ziel = ContainerExecutionTarget(ContainerTarget("podman", runner=engine))
+    with pytest.raises(MkarchisoMissing):
+        ziel.resolve_executable()
+
+
+def test_the_image_carries_every_tool_a_boot_mode_may_need() -> None:
+    """Sonst entsteht eine Sackgasse.
+
+    Beim ersten echten Lauf am 07.09.2026 brach mkarchiso mit "grub-install is
+    not available on this host" ab: archiso zieht grub nicht mit, das Programm
+    bietet den Bootmodus uefi.grub aber an. Die Vorabpruefung haette daraufhin
+    gesagt "das Abbild muss neu gebaut werden" -- und dabei waere wieder
+    dasselbe Abbild ohne grub entstanden.
+
+    Was CONDITIONAL_TOOLS fordert, muss also im Containerfile stehen.
+    """
+    from archcustomiser.core.build.container import CONTAINERFILE
+    from archcustomiser.core.environment import CONDITIONAL_TOOLS
+
+    for _werkzeug, paket, zweck in CONDITIONAL_TOOLS.values():
+        assert paket in CONTAINERFILE, (
+            f"Das Container-Abbild bringt {paket} nicht mit ({zweck}) -- "
+            f"ein Bau mit diesem Bootmodus koennte darin nie gelingen."
+        )

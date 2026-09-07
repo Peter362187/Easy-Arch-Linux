@@ -218,7 +218,9 @@ options:
     order: 40
     label: "Archivwerkzeuge"
     description: "Entpackt zip, 7z, rar und Konsorten."
-    packages: [p7zip, unrar, unzip, zip]
+    # p7zip heisst seit dem Umzug auf die Upstream-Quelle 7zip; der alte Name
+    # existiert nur noch als provides und wuerde pacman zur Rueckfrage bringen.
+    packages: [7zip, unrar, unzip, zip]
 
   - id: shell-tools
     group: tools

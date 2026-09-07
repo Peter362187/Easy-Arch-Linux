@@ -206,17 +206,33 @@ def test_the_installer_gets_every_chosen_package() -> None:
     assert not fehlend, f"gewaehlte Pakete fehlen in archinstall.json: {sorted(fehlend)[:5]}"
 
 
-# Was archinstall wirklich kennt. Kein Ratespiel: die Werte stammen aus den
-# Enums GfxDriver und GreeterType und wurden gegen v3.0.0 und master geprueft.
+# Was archinstall wirklich kennt. Kein Ratespiel: woertlich aus den Enums
+# GfxDriver (archinstall/lib/hardware.py) und GreeterType
+# (archinstall/default_profiles/profile.py), abgerufen am 07.09.2026.
+#
+# Diese Mengen waren bei ihrer Einfuehrung selbst falsch: "Nvidia (proprietary)"
+# stand darin, obwohl das Enum den Wert nicht mehr fuehrt -- der Test haette
+# also ausgerechnet den kaputten Katalogwert durchgelassen. Und "lxdm" gibt es
+# im Greeter-Enum nicht. Wer sie fortschreibt, holt sie bitte wieder aus der
+# Quelle, nicht aus dem Gedaechtnis.
 BEKANNTE_TREIBER = {
     "All open-source",
     "AMD / ATI (open-source)",
     "Intel (open-source)",
     "Nvidia (open kernel module for newer GPUs, Turing+)",
     "Nvidia (open-source nouveau driver)",
-    "Nvidia (proprietary)",
+    "VirtualBox (open-source)",
 }
-BEKANNTE_GREETER = {"sddm", "gdm", "lightdm-gtk-greeter", "lxdm", "ly", "cosmic-greeter"}
+BEKANNTE_GREETER = {
+    "lightdm-gtk-greeter",
+    "lightdm-slick-greeter",
+    "sddm",
+    "gdm",
+    "ly",
+    "cosmic-greeter",
+    "plasma-login-manager",
+    "dms-greeter",
+}
 
 
 @pytest.mark.parametrize(
