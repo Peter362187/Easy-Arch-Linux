@@ -37,6 +37,12 @@ from .targets import ExecutionTarget, LocalTarget
 
 log = logging.getLogger(__name__)
 
+# Unter Windows oeffnet jeder Unterprozess sonst kurz ein schwarzes
+# Konsolenfenster -- bei einem Bau mit vielen Aufrufen flackert der
+# Bildschirm. Auf allen anderen Systemen ist die Kennzahl 0, also wirkungslos.
+KEIN_FENSTER = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
 READ_SIZE = 4096
 TERMINATE_GRACE_SECONDS = 8.0
 
@@ -201,6 +207,7 @@ class MkarchisoRunner:
                     stdin=subprocess.DEVNULL,   # mkarchiso darf nichts erfragen
                     bufsize=0,
                     shell=False,
+                    creationflags=KEIN_FENSTER,
                     env=self.environment(),
                     cwd=self.target.cwd(),
                 )

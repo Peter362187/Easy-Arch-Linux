@@ -32,7 +32,7 @@ pacman, nicht dieses Programm.
 | 6 | ISO-Build ausführen (`mkarchiso` starten) | fertig |
 | 7 | Logging und Fehlerbehandlung | fertig |
 | 8 | Branding | fertig |
-| 9 | Tests | laufend (530) |
+| 9 | Tests | laufend (553) |
 | 10 | UI/UX und Dokumentation | laufend |
 
 **Der Funktionsumfang ist vollständig:** Wizard, Profile, Paketprüfung, Dry-Run,
@@ -520,7 +520,7 @@ src/archcustomiser/
 ├── data/catalog/            der gesamte Optionsumfang als YAML
 └── profiles/                mitgelieferte Profile
 
-tests/                       530 Tests, ohne Netz und ohne Bildschirm
+tests/                       553 Tests, ohne Netz und ohne Bildschirm
 tools/                       Hilfsskripte für die Entwicklung
 ArchCustomiser.bat           Doppelklick-Start, richtet sich selbst ein
 ```

@@ -203,6 +203,19 @@ class SelectionStore(QObject):
         self._recompute()
         self.packagesChanged.emit()
 
+    def set_extra_repositories(self, names: Iterable[str]) -> None:
+        """Welche Repositories die Freitextpakete brauchen.
+
+        Wird von der Freitextseite nach jeder Pruefung gesetzt: nur dort ist
+        bekannt, aus welchem Repository ein eingetippter Name stammt.
+        """
+        new = list(dict.fromkeys(names))
+        if new == self._config.extra_repositories:
+            return
+        self._config.extra_repositories = new
+        self._recompute()
+        self.packagesChanged.emit()
+
     def set_provider_choice(self, virtual: str, provider: str) -> None:
         self._config.provider_choices[virtual] = provider
         self._recompute()
@@ -216,6 +229,17 @@ class SelectionStore(QObject):
             self._config = config
             self._config.catalog_version = self.catalog.catalog_version
             self.secrets.clear()
+            # Katalogvorgaben fuer alles nachtragen, was das Profil nicht
+            # nennt. Ohne das liefen Anzeige und Ergebnis auseinander: die
+            # Formularfelder zeigen bei fehlendem Wert die Katalogvorgabe an,
+            # die Konfiguration blieb aber leer. Bei minimal.yaml sah der
+            # Benutzer deshalb "Benutzerkonto anlegen: arch", und die fertige
+            # ISO hatte gar kein Konto -- bei gesperrtem Root also niemanden,
+            # der sich anmelden koennte.
+            #
+            # Nur fehlende Felder, keine Auswahlen: eine leere Auswahl kann im
+            # Profil ausdruecklich gemeint sein, ein fehlendes Feld nicht.
+            self._fill_missing_field_defaults()
         finally:
             self._applying = False
         self._recompute()
@@ -232,6 +256,21 @@ class SelectionStore(QObject):
             self.selectionChanged.emit(category.id)
 
     # -- intern ---------------------------------------------------------------
+    def _fill_missing_field_defaults(self) -> None:
+        """Katalogvorgaben nur dort, wo das Profil schweigt.
+
+        Was das Profil sagt, bleibt unangetastet -- auch ein leerer Wert, denn
+        der kann gewollt sein. Geheimfelder bleiben aussen vor; die gehoeren
+        nie in eine Konfiguration.
+        """
+        for category in self.catalog.categories:
+            for spec in category.fields:
+                if spec.default is None or spec.secret:
+                    continue
+                if spec.binding in self._config.fields:
+                    continue
+                self._config.set_field(spec.binding, spec.default)
+
     def _apply_defaults(self) -> None:
         for category in self.catalog.categories:
             if category.default_selection:

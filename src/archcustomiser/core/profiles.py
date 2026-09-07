@@ -22,6 +22,7 @@ datenzerstoerend.
 from __future__ import annotations
 
 import logging
+import re
 import os
 import tempfile
 from dataclasses import dataclass, field
@@ -33,10 +34,16 @@ import yaml
 
 from .catalog import Catalog
 from .config import SCHEMA_VERSION, BuildConfig, SelectionSource
+from .packages.errors import InvalidPackageName
+from .packages.names import split_constraint, validate_name
 from .paths import bundled_profiles_dir, ensure_dir, user_profiles_dir
 from .resolver import Resolution
 
 log = logging.getLogger(__name__)
+
+# Repository-Namen in pacman.conf: Buchstaben, Ziffern, Bindestrich,
+# Unterstrich. Alles andere koennte die erzeugte Datei zerreissen.
+_REPO_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
 ProfileIssueCode = Literal[
     "unknown_option",
@@ -46,6 +53,7 @@ ProfileIssueCode = Literal[
     "moved_to_extra",
     "version_mismatch",
     "secret_dropped",
+    "invalid_package",
 ]
 
 
@@ -167,6 +175,10 @@ class ProfileService:
             document["description"] = description
         if config.extra_packages:
             document["extra_packages"] = sorted(set(config.extra_packages))
+        if config.extra_repositories:
+            # Muss mit, sonst geht beim Speichern verloren, WARUM die
+            # Freitextpakete ueberhaupt aufloesbar sind.
+            document["extra_repositories"] = sorted(set(config.extra_repositories))
         if config.provider_choices:
             document["provider_choices"] = dict(sorted(config.provider_choices.items()))
 
@@ -319,9 +331,51 @@ class ProfileService:
             # Snapshot als Paket auftaucht). Ein Ueberschreiben wuerde genau
             # die Daten verlieren, die gerettet werden sollten.
             for name in extra:
-                text = str(name)
+                text = str(name).strip()
+                # Dieselbe Pruefung wie im Freitextfeld. Bis zum 07.09.2026
+                # fehlte sie hier: ein Paketname aus einer Profildatei landete
+                # ungeprueft in packages.x86_64 und in archinstall.json. Eine
+                # Profildatei ist aber genauso wenig vertrauenswuerdig wie eine
+                # Tastatureingabe -- sie wird weitergegeben und heruntergeladen.
+                basis, _einschraenkung = split_constraint(text)
+                try:
+                    validate_name(basis)
+                except InvalidPackageName as fehler:
+                    issues.append(
+                        ProfileIssue(
+                            severity="warning",
+                            code="invalid_package",
+                            ref=text,
+                            message=(
+                                f"{text!r} ist kein gueltiger Paketname "
+                                f"({fehler.reason}) und wurde nicht uebernommen."
+                            ),
+                            action_taken="verworfen",
+                        )
+                    )
+                    continue
                 if text not in config.extra_packages:
                     config.extra_packages.append(text)
+
+        repos = data.get("extra_repositories") or []
+        if isinstance(repos, Sequence) and not isinstance(repos, str):
+            for eintrag in repos:
+                # Derselbe Massstab wie bei Paketnamen: was hier steht, landet
+                # woertlich in der pacman.conf des Abbilds.
+                name = str(eintrag).strip()
+                if not _REPO_NAME.match(name):
+                    issues.append(
+                        ProfileIssue(
+                            severity="warning",
+                            code="invalid_package",
+                            ref=name,
+                            message=f"{name!r} ist kein gueltiger Repository-Name.",
+                            action_taken="verworfen",
+                        )
+                    )
+                    continue
+                if name not in config.extra_repositories:
+                    config.extra_repositories.append(name)
 
         choices = data.get("provider_choices") or {}
         if isinstance(choices, Mapping):

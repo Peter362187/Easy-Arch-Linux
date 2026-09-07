@@ -257,3 +257,103 @@ def test_without_selinux_there_is_no_label(vorbereitet, monkeypatch) -> None:
     argv = vorbereitet.wrap(["mkarchiso"])
     mounts = [argv[i + 1] for i, t in enumerate(argv) if t == "-v"]
     assert not any(m.endswith(":Z") for m in mounts)
+
+
+# ---------------------------------------------------------------------------
+# Das Abbild -- die beiden Schloesser, die den Container-Weg unmoeglich machten
+#
+# Gemeldet und am 07.09.2026 nachgewiesen: der Container-Weg konnte im
+# Auslieferungszustand NIE funktionieren. Zwei voneinander unabhaengige
+# Fehler, die sich gegenseitig verdeckten.
+# ---------------------------------------------------------------------------
+
+
+def test_the_containerfile_actually_reaches_the_engine(engine: FakeEngine) -> None:
+    """Frueher stand ``--file -`` da, ohne dass je etwas nach stdin ging.
+
+    ``_run`` kennt kein ``input=``. Die Engine erbte damit das stdin des
+    Programms: aus einem Terminal gestartet wartete sie 1800 Sekunden, aus der
+    Oberflaeche gestartet las sie sofort EOF und brach ab. Der Text der
+    Konstanten CONTAINERFILE kam nirgends an.
+    """
+    gesehen: dict[str, str] = {}
+
+    def mitlesend(argv, timeout=None) -> ContainerResult:
+        argv = [str(i) for i in argv]
+        if "build" in argv:
+            pfad = argv[argv.index("--file") + 1]
+            assert pfad != "-", "das Containerfile geht wieder nach stdin ins Leere"
+            gesehen["inhalt"] = Path(pfad).read_text(encoding="utf-8")
+            gesehen["kontext"] = argv[-1]
+        return engine(argv, timeout)
+
+    ziel = ContainerTarget("podman", runner=mitlesend)
+    ziel.build_image()
+
+    assert "FROM" in gesehen["inhalt"], "die Engine bekam kein Containerfile"
+    assert "archiso" in gesehen["inhalt"], "das Abbild wuerde ohne archiso gebaut"
+    # Der Bauzusammenhang darf nicht das Arbeitsverzeichnis des Programms sein
+    # -- sonst wanderte der ganze Quellbaum zur Engine.
+    assert gesehen["kontext"] not in (".", ""), "der ganze Projektordner ginge an die Engine"
+
+
+def test_the_temporary_containerfile_does_not_stay_behind(engine: FakeEngine) -> None:
+    pfade: list[str] = []
+
+    def merkend(argv, timeout=None) -> ContainerResult:
+        argv = [str(i) for i in argv]
+        if "build" in argv:
+            pfade.append(argv[argv.index("--file") + 1])
+        return engine(argv, timeout)
+
+    ContainerTarget("podman", runner=merkend).build_image()
+    assert pfade and not Path(pfade[0]).exists(), "das Wegwerfverzeichnis blieb liegen"
+
+
+@pytest.fixture
+def ohne_dateisystem(monkeypatch):
+    """prepare() ohne echte Verzeichnisse -- POSIX-Pfade, kein mkdir.
+
+    Das Container-Ziel weist Windows-Pfade zu Recht ab; fuer die Pruefung des
+    Ablaufs braucht es aber kein Dateisystem.
+    """
+    monkeypatch.setattr(Path, "mkdir", lambda self, **kwargs: None)
+    return ("/home/x/work", "/home/x/out")
+
+
+def test_preparing_a_build_makes_sure_the_image_exists(engine: FakeEngine, ohne_dateisystem) -> None:
+    """ensure_image wurde im ganzen Programm von niemandem gerufen.
+
+    Ohne Abbild startet wrap() anschliessend ``podman run
+    localhost/archcustomiser-archiso`` -- ein localhost-Name wird nicht aus dem
+    Netz geholt, die Engine bricht sofort ab.
+    """
+    engine.antworten = {"exists": ContainerResult(1)}     # Abbild fehlt
+    ziel = ContainerExecutionTarget(ContainerTarget("podman", runner=engine))
+    ziel.prepare("testiso", *ohne_dateisystem)
+
+    assert engine.saw("image", "exists"), "es wurde nie nach dem Abbild gefragt"
+    assert engine.saw("build", "--tag"), "das fehlende Abbild wurde nicht gebaut"
+
+
+def test_an_existing_image_is_not_rebuilt(engine: FakeEngine, ohne_dateisystem) -> None:
+    engine.antworten = {"exists": ContainerResult(0)}     # Abbild ist da
+    ziel = ContainerExecutionTarget(ContainerTarget("podman", runner=engine))
+    ziel.prepare("testiso", *ohne_dateisystem)
+
+    assert not engine.saw("build", "--tag"), "das vorhandene Abbild wurde neu gebaut"
+
+
+def test_a_container_error_carries_a_build_log() -> None:
+    """``controller.run`` faengt nur BuildError -- daran haengt das Protokoll.
+
+    Als blosse Exception rutschte ein gescheiterter Abbildbau am Schreiben der
+    Protokolldatei vorbei: Fehlermeldung ja, Protokoll nein.
+    """
+    from archcustomiser.core.build.errors import BuildError
+
+    assert issubclass(ContainerError, BuildError)
+    fehler = ContainerError("fuer den Benutzer", "fuer das Protokoll")
+    assert isinstance(fehler, BuildError)
+    assert fehler.user_message == "fuer den Benutzer"
+    assert fehler.technical == "fuer das Protokoll"

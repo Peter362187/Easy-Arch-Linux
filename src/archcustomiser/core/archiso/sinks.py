@@ -119,6 +119,18 @@ class DirectorySink:
             destination = root / entry.path
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes(entry.content)
+            modus = tree.mode_for(entry.path, default=-1)
+            if modus >= 0 and os.name != "nt":
+                # Nur wo der Baum ausdruecklich Rechte anmeldet, und nur unter
+                # POSIX. Unter Windows kann os.chmod allein das Schreibschutz-
+                # Bit umlegen -- 0400 wuerde dort also nichts schuetzen (die
+                # Rechte sind ACLs), aber sehr wohl das spaetere Aufraeumen des
+                # Arbeitsverzeichnisses mit "Zugriff verweigert" scheitern
+                # lassen. Genau das ist beim Einbau passiert.
+                try:
+                    os.chmod(destination, modus)
+                except OSError:
+                    log.debug("Rechte fuer %s nicht setzbar", destination, exc_info=True)
             done += 1
             if progress and done % PROGRESS_STEP == 0:
                 progress(done, total)
@@ -223,7 +235,10 @@ class TarSink:
                 if entry is not None:
                     info = tarfile.TarInfo(f"{self.root_name}/{path}")
                     info.size = len(entry.content)
-                    info.mode = 0o644
+                    # Nicht mehr fest 0644: sonst laege der Passwort-Hash aus
+                    # etc/shadow im entpackten Archiv weltlesbar. Die Rechte
+                    # stehen fest im Baum, das Archiv bleibt reproduzierbar.
+                    info.mode = tree.mode_for(path)
                     info.mtime = self.mtime
                     archive.addfile(info, io.BytesIO(entry.content))
                 else:

@@ -323,6 +323,23 @@ class BuildDialog(QDialog):
         event.ignore()
         self._on_cancel_clicked()
 
+    def reject(self) -> None:
+        """Esc ginge sonst an ``closeEvent`` vorbei.
+
+        Bei einem QDialog loest die Esc-Taste ``reject()`` aus, und das
+        schliesst den Dialog, ohne ``closeEvent`` mit der Abbruchfrage zu
+        durchlaufen. Der Schutz oben war damit ein Stueck weit Zierde: ein
+        Tastendruck genuegte, der Dialog verschwand, und der Bau lief
+        unsichtbar weiter -- mit voller Last und ohne Weg, ihn zu beenden.
+
+        Keine Rekursion: ``_on_cancel_clicked`` ruft ``reject()`` nur im Zweig
+        ``self._done``, und den faengt die erste Bedingung hier schon ab.
+        """
+        if self._done or not self.job.running:
+            super().reject()
+            return
+        self._on_cancel_clicked()
+
 
 
 def _open(path: Path) -> None:

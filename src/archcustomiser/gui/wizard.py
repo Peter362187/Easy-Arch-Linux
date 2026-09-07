@@ -120,6 +120,10 @@ class BuildWizard(QWizard):
         self._visited: set[str] = set()
         self._saved_once = False
         self._initial_fingerprint = self._fingerprint()
+        # Der Stand, der zuletzt auf der Platte landete. Anfangs ist das der
+        # Ausgangszustand -- wer nur oeffnet und wieder schliesst, wird nicht
+        # gefragt.
+        self._gespeicherter_stand = self._initial_fingerprint
         self.sidebar = StepSidebar(tuple(self._order))
         self.sidebar.stepClicked.connect(self._jump_to)
         self.setSideWidget(self.sidebar)
@@ -337,6 +341,7 @@ class BuildWizard(QWizard):
             QMessageBox.warning(self, "Speichern fehlgeschlagen", str(exc))
             return
         self._saved_once = True
+        self._gespeicherter_stand = self._fingerprint()
         QMessageBox.information(
             self,
             "Profil gespeichert",
@@ -427,6 +432,21 @@ class BuildWizard(QWizard):
         dialog.exec()
 
     # -- Beenden --------------------------------------------------------------
+    def closeEvent(self, event) -> None:
+        """Einen laufenden Bau beenden, bevor Qt die Faeden abraeumt.
+
+        Ein QThread, den Qt einsammelt, waehrend er noch laeuft, beendet den
+        ganzen Prozess ("QThread: Destroyed while thread is still running").
+        Beim Schliessen des Fensters mit laufendem Bau war das erreichbar.
+        Hier wird deshalb erst abgebrochen und gewartet -- ``wait()`` deckt
+        seit dem 03.09.2026 auch den Abbruchfaden mit ab.
+        """
+        job = getattr(self, "_build_job", None)
+        if job is not None and job.running:
+            job.cancel()
+            job.wait()
+        super().closeEvent(event)
+
     def reject(self) -> None:
         """Rueckfrage statt kommentarlosem Verwerfen.
 
@@ -452,8 +472,12 @@ class BuildWizard(QWizard):
             return
         if antwort == QMessageBox.StandardButton.Save:
             self._save_profile()
-            if not self._saved_once:
-                return          # Speichern abgebrochen -- also auch nicht beenden
+            if self._has_unsaved_work():
+                # Speichern abgebrochen oder fehlgeschlagen -- dann auch nicht
+                # beenden. Frueher wurde hier _saved_once geprueft; nach einem
+                # frueheren Speichern war das schon True, und ein abgebrochener
+                # zweiter Speicherversuch beendete das Programm trotzdem.
+                return
         super().reject()
 
     def _has_unsaved_work(self) -> bool:
@@ -462,13 +486,17 @@ class BuildWizard(QWizard):
         Wer das Programm nur oeffnet und gleich wieder schliesst, soll nicht
         gefragt werden -- die Vorgabewerte allein zaehlen deshalb nicht.
         """
-        if self._saved_once:
-            return False
-        # Gegen den Ausgangszustand vergleichen, nicht gegen "leer": der Store
-        # ist schon beim Start mit den Vorgaben des Katalogs gefuellt --
-        # Rechnername, Sprache, Tastatur, Zeitzone. Wer nur oeffnet und wieder
-        # schliesst, soll nicht gefragt werden.
-        return self._fingerprint() != self._initial_fingerprint
+        # Gegen den zuletzt gespeicherten Stand vergleichen, nicht gegen
+        # "irgendwann einmal gespeichert". Frueher stand hier
+        # "if self._saved_once: return False" -- wer einmal gespeichert und
+        # danach eine halbe Stunde weitergearbeitet hatte, wurde beim Beenden
+        # nicht mehr gefragt und verlor alles wortlos. Zurueckgesetzt wurde der
+        # Merker nirgends.
+        #
+        # Der Ausgangszustand zaehlt dabei als "gespeichert": der Store ist
+        # schon beim Start mit den Vorgaben des Katalogs gefuellt --
+        # Rechnername, Sprache, Tastatur, Zeitzone.
+        return self._fingerprint() != self._gespeicherter_stand
 
     def _fingerprint(self) -> tuple:
         config = self.store.config
@@ -563,7 +591,13 @@ class BuildWizard(QWizard):
         import sys as _sys
 
         if _sys.platform == "win32":
-            return self._choose_wsl_target()
+            # Ein None aus diesem Zweig hiess bisher "lokal bauen" -- und das
+            # kann es hier gar nicht bedeuten: _offer_setup wird nur erreicht,
+            # wenn es nachweislich KEINEN brauchbaren Weg gibt. Wer den
+            # WSL-Dialog abbrach, loeste damit einen aussichtslosen lokalen
+            # Bau aus. Jetzt gilt Abbruch als Abbruch, wie im Zweig darunter.
+            ziel = self._choose_wsl_target()
+            return _ABGEBROCHEN if ziel is None else ziel
 
         zeilen = []
         for option in optionen:
@@ -649,7 +683,30 @@ class BuildWizard(QWizard):
         job = BuildJob(self.catalog, config, self.store.resolution(), self.store.secrets, self)
         if target is not None:
             job.controller.target = target
-        report = job.preflight(work_dir, out_dir)
+
+        # Dasselbe Muster wie in _choose_target, und aus demselben Grund: die
+        # Vorabpruefung startet beim WSL-Ziel rund ein Dutzend wsl.exe-Aufrufe
+        # nacheinander. Gemessen 2 bis 8 Sekunden, je nachdem ob die Verteilung
+        # schon laeuft -- im kalten Fall reisst das die Fuenf-Sekunden-Schwelle,
+        # ab der Windows ein Fenster als "keine Rueckmeldung" markiert und
+        # grau ueberzieht. Der Kern ist Qt-frei und laeuft gefahrlos nebenher;
+        # ausgewertet wird der fertige Bericht erst wieder hier.
+        from .widgets.wait_dialog import run_with_wait
+
+        report, fehler = run_with_wait(
+            lambda: job.preflight(work_dir, out_dir),
+            "Bauumgebung wird geprueft ...",
+            parent=self,
+        )
+        if fehler is not None:
+            QMessageBox.warning(
+                self,
+                "Vorabpruefung fehlgeschlagen",
+                "Die Bauumgebung liess sich nicht pruefen:\n\n" + str(fehler),
+            )
+            return
+        if report is None:
+            return                    # vom Benutzer abgebrochen
 
         if not report.ok and not self._can_build_here(report):
             self._offer_profile_export(report)

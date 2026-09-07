@@ -16,6 +16,7 @@ import pytest
 pytest.importorskip("PySide6")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import QObject, Signal   # noqa: E402
 from PySide6.QtWidgets import QApplication   # noqa: E402
 
 from archcustomiser.core.config import SelectionSource   # noqa: E402
@@ -370,3 +371,153 @@ def test_a_second_click_does_not_start_a_second_cancel(qapp, catalog, resolver) 
     job.wait(10_000)
 
     assert Zaehlend.aufrufe == 1
+
+
+# ---------------------------------------------------------------------------
+# Durchsicht vom 07.09.2026 -- drei Wege, auf denen Arbeit verlorenging
+# ---------------------------------------------------------------------------
+
+
+def test_going_back_to_the_start_page_does_not_discard_everything(qapp, catalog, tmp_path) -> None:
+    """Zurueck zur Startseite und wieder vor -- und alles war weg.
+
+    validatePage() lief beim zweiten Mal erneut und rief store.reset(). Wer
+    nach zwanzig Minuten noch einmal nachsehen wollte, welche Vorlage er
+    genommen hatte, verlor die gesamte Zusammenstellung.
+    """
+    from archcustomiser.core.profiles import ProfileService
+    from archcustomiser.gui.pages.welcome import WelcomePage
+    from archcustomiser.gui.store import SelectionStore
+
+    store = SelectionStore(catalog)
+    seite = WelcomePage(store, ProfileService(catalog, profiles_dir=tmp_path))
+    seite._leer.button.setChecked(True)
+
+    assert seite.validatePage()                       # erster Durchgang
+    store.set_field("basics.hostname", "meinrechner")
+    store.set_extra_packages(["neovim", "htop"])
+
+    assert seite.validatePage()                       # zurueck und wieder vor
+    assert store.field("basics.hostname") == "meinrechner", "die Eingaben wurden verworfen"
+    assert store.extra_packages() == ("neovim", "htop")
+
+
+def test_escape_does_not_abandon_a_running_build(qapp) -> None:
+    """Esc ging an closeEvent vorbei -- der Bau lief unsichtbar weiter.
+
+    Bei einem QDialog loest Esc reject() aus, nicht closeEvent. Der dort
+    eingebaute Schutz war damit wirkungslos: ein Tastendruck, das Fenster war
+    weg, und mkarchiso lief mit voller Last weiter, ohne Weg es zu beenden.
+    """
+    from pathlib import Path
+
+    from PySide6.QtWidgets import QDialog
+
+    from archcustomiser.gui.widgets.build_dialog import BuildDialog
+
+    gefragt: list[str] = []
+
+    class LaufenderJob(QObject):
+        stepChanged = Signal(object, str)
+        progressChanged = Signal(float, str, str)
+        linesReceived = Signal(list)
+        finished = Signal(object)
+        failed = Signal(object)
+        cancelled = Signal()
+        running = True
+        cancelling = False
+
+        def cancel(self) -> None:
+            gefragt.append("abbruch")
+
+    dialog = BuildDialog(LaufenderJob(), Path("."), Path("."))
+    dialog._done = False
+
+    # Die Rueckfrage ist modal und wuerde hier ewig warten. Geprueft wird, DASS
+    # sie kommt -- nicht, was der Benutzer antwortet.
+    dialog._on_cancel_clicked = lambda: gefragt.append("rueckfrage")
+    dialog.reject()
+
+    assert gefragt == ["rueckfrage"], "Esc schloss den Dialog ohne jede Rueckfrage"
+    assert not dialog.result(), "der Dialog wurde trotz laufendem Bau geschlossen"
+
+    # Ist der Bau vorbei, muss Esc wieder schliessen duerfen.
+    dialog._done = True
+    dialog.reject()
+    assert dialog.result() == QDialog.DialogCode.Rejected
+
+
+def test_work_after_saving_still_counts_as_unsaved(qapp, catalog, tmp_path) -> None:
+    """Nach dem ersten Speichern verstummte die Rueckfrage fuer immer.
+
+    _saved_once wurde gesetzt und nirgends zurueckgenommen. Wer speicherte und
+    danach eine halbe Stunde weiterarbeitete, verlor beim Beenden alles --
+    wortlos.
+    """
+    from archcustomiser.core.environment import detect_environment
+    from archcustomiser.core.packages.service import PackageService
+    from archcustomiser.core.profiles import ProfileService
+    from archcustomiser.gui.packages_worker import PackageController
+    from archcustomiser.gui.store import SelectionStore
+    from archcustomiser.gui.wizard import BuildWizard
+
+    store = SelectionStore(catalog)
+    profile = ProfileService(catalog, profiles_dir=tmp_path)
+    wizard = BuildWizard(
+        catalog, store, PackageController(PackageService()), profile, detect_environment()
+    )
+
+    assert not wizard._has_unsaved_work(), "der blosse Ausgangszustand zaehlt nicht"
+
+    store.set_field("basics.hostname", "ersterstand")
+    assert wizard._has_unsaved_work()
+
+    # Speichern nachstellen -- ohne Dialog.
+    profile.save(store.config, tmp_path / "test.yaml", include_snapshot=False)
+    wizard._saved_once = True
+    wizard._gespeicherter_stand = wizard._fingerprint()
+    assert not wizard._has_unsaved_work()
+
+    store.set_field("basics.hostname", "danachweitergearbeitet")
+    assert wizard._has_unsaved_work(), "Arbeit nach dem Speichern galt als gespeichert"
+
+
+def test_loading_a_profile_fills_in_what_it_does_not_mention(qapp, catalog) -> None:
+    """Sonst zeigt die Maske etwas anderes an, als die ISO bekommt.
+
+    Ein Formularfeld ohne Wert zeigt die Katalogvorgabe -- die Konfiguration
+    blieb aber leer. Bei minimal.yaml sah der Benutzer deshalb den Benutzer
+    "arch", und die fertige ISO hatte gar kein Konto; bei gesperrtem
+    Root-Konto also niemanden, der sich haette anmelden koennen.
+    """
+    from archcustomiser.core.config import BuildConfig
+    from archcustomiser.gui.store import SelectionStore
+
+    store = SelectionStore(catalog)
+
+    # Ein Profil, das von user.* nichts sagt -- so wie minimal.yaml frueher.
+    mager = BuildConfig()
+    mager.set_field("basics.hostname", "archmini")
+    assert "user.username" not in mager.fields
+
+    store.replace_config(mager)
+
+    assert store.config.field("basics.hostname") == "archmini", "das Profil wurde ueberschrieben"
+    assert store.config.creates_user, "die Maske zeigte ein Konto, die ISO bekaeme keines"
+    assert store.config.username == "arch"
+
+
+def test_loading_a_profile_never_overwrites_what_it_does_say(qapp, catalog) -> None:
+    """Auch nicht bei einem leeren Wert -- der kann gewollt sein."""
+    from archcustomiser.core.config import BuildConfig
+    from archcustomiser.gui.store import SelectionStore
+
+    store = SelectionStore(catalog)
+    eigen = BuildConfig()
+    eigen.set_field("user.username", "jason")
+    eigen.set_field("user.create", False)
+
+    store.replace_config(eigen)
+
+    assert store.config.field("user.username") == "jason"
+    assert store.config.field("user.create") is False

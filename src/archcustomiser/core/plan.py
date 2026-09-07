@@ -112,10 +112,19 @@ def build_archinstall_config(
     document["timezone"] = config.field_str("basics.timezone", "Europe/Berlin")
     document["ntp"] = config.field_bool("basics.ntp", True)
 
-    # Nur was der Benutzer ausdruecklich zusaetzlich wollte: die Pakete der
-    # gewaehlten Optionen bringt archinstall ueber sein Profil selbst mit.
-    if config.extra_packages:
-        document["packages"] = sorted(set(config.extra_packages))
+    # Alles, was der Benutzer zusammengestellt hat -- nicht nur die
+    # Freitextpakete. Die Annahme, archinstall bringe die Pakete der gewaehlten
+    # Optionen ueber sein Profil selbst mit, traegt nur fuer die Handvoll
+    # Desktop-Profile, die archinstall kennt. Wer Firefox, Steam und Docker
+    # anhakte, fand sie im installierten System nicht wieder.
+    #
+    # ``resolution.package_names`` enthaelt nur die gewaehlten und aufgeloesten
+    # Pakete; die reinen Live-Helfer (archinstall, syslinux,
+    # mkinitcpio-archiso) kommen erst spaeter ueber ``required_packages()``
+    # dazu und schwappen hier nicht mit hinein.
+    pakete = set(config.extra_packages) | set(resolution.package_names)
+    if pakete:
+        document["packages"] = sorted(pakete)
 
     services = sorted(
         {

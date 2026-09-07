@@ -852,6 +852,14 @@ class ContainerExecutionTarget:
         self._work_dir = work_dir
         self._out_dir = out_dir
         self._container_name = container_name(iso_name)
+        # Ohne diese Zeile gab es das Abbild nie: ensure_image wurde im ganzen
+        # Programm von niemandem gerufen, und wrap() startete anschliessend
+        # "podman run localhost/archcustomiser-archiso" -- ein localhost-Name
+        # wird nicht aus dem Netz geholt, die Engine brach sofort ab.
+        # prepare ist die richtige Stelle: genau einmal je Bau, vor dem ersten
+        # podman run, und im Bau-Faden. Die Vorabpruefung schiede aus, weil sie
+        # nichts herunterladen darf und bei skip_preflight uebersprungen wird.
+        self.container.ensure_image()
         # Dieselben Pfade wie auf dem Host -- das ist der ganze Trick.
         return BuildPaths(
             profile=str(work_dir / PROFILE_DIRNAME),

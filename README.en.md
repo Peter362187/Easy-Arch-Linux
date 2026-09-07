@@ -225,7 +225,7 @@ The complete documentation is German:
 * **[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)** — architecture, design decisions
   and the reasoning behind them
 
-530 tests, no network and no display required:
+553 tests, no network and no display required:
 
 ```bash
 python -m pytest -q

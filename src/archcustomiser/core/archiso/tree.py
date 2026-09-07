@@ -26,6 +26,11 @@ from typing import Iterator
 
 from .errors import DuplicateEntryError, UnsafePathError
 
+# Der Unterordner des Profils, dessen Inhalt spaeter das Wurzeldateisystem des
+# Abbilds wird. Hier definiert und nicht importiert: tree.py ist die unterste
+# Schicht und darf von den Erzeugern nichts wissen.
+AIROOTFS = "airootfs"
+
 MAX_FILE_BYTES = 64 * 1024 * 1024
 
 
@@ -227,6 +232,32 @@ class ProfileTree:
     def file_permissions(self) -> dict[str, str]:
         """Das Dict fuer ``file_permissions`` in profiledef.sh."""
         return {path: entry.value for path, entry in sorted(self.permissions.items())}
+
+    def mode_for(self, path: str, *, default: int = 0o644) -> int:
+        """Der Dateimodus, den dieser Baumpfad tragen soll.
+
+        Uebersetzt zwischen den beiden Schluesselraeumen: ``files`` ist nach
+        dem Profilpfad verschluesselt (``airootfs/etc/shadow``),
+        ``permissions`` nach dem Pfad im fertigen Abbild (``/etc/shadow``).
+
+        Gebraucht wird das von den Senken. Bis zum 07.09.2026 schrieben die
+        einen festen Modus 0644 fuer jede Datei -- der Passwort-Hash in
+        ``etc/shadow`` lag im exportierten Archiv damit weltlesbar, obwohl der
+        Baum laengst 0400 angemeldet hatte. Beim Bau selbst fiel das nicht auf,
+        weil mkarchiso die Rechte aus ``file_permissions`` in profiledef.sh
+        nimmt und den Baum gar nicht sieht.
+        """
+        marker = f"{AIROOTFS}/"
+        if not path.startswith(marker):
+            return default
+        im_abbild = path[len(AIROOTFS):]        # "airootfs/etc/shadow" -> "/etc/shadow"
+        eintrag = self.permissions.get(im_abbild)
+        if eintrag is None:
+            return default
+        try:
+            return int(eintrag.mode, 8)
+        except (TypeError, ValueError):
+            return default
 
     def entries(self) -> Iterator[TreeFile | TreeSymlink]:
         for path in self.paths():

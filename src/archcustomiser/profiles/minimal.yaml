@@ -12,6 +12,11 @@ selections:
   services: [timesyncd]
 
 fields:
+  # Ohne diese beiden Zeilen entsteht eine ISO ganz ohne Konto -- und weil
+  # das Root-Konto per Vorgabe gesperrt ist, koennte sich daran niemand
+  # anmelden. Die Oberflaeche zeigte trotzdem "arch" an.
+  user.create: true
+  user.username: arch
   basics.hostname: archmini
   basics.locale: de_DE.UTF-8
   basics.keymap: de-latin1

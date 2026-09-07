@@ -349,3 +349,94 @@ def test_the_catalog_rejects_a_dangerous_menu_title() -> None:
     assert not validation.validate("menu_title", 'Boese" ; x').ok
     assert not validation.validate("menu_title", "a" * 70).ok
     assert not validation.validate("menu_title", "Titel mit $HOME").ok
+
+
+# ---------------------------------------------------------------------------
+# Zwei Luecken, am 07.09.2026 gemeldet und am Code nachgewiesen
+# ---------------------------------------------------------------------------
+
+
+def test_the_exported_archive_does_not_expose_the_password_hash(tmp_path) -> None:
+    """TarSink schrieb jede Datei mit festem 0644 -- auch etc/shadow.
+
+    Der Baum meldet dafuer laengst 0400 an, aber nur profiledef.sh las das;
+    die Senke sah es nie. Wer ein Profil weitergab, gab den sha512-Hash
+    weltlesbar mit.
+    """
+    import io
+    import tarfile
+
+    from archcustomiser.core.archiso.generator import ProfileGenerator
+    from archcustomiser.core.archiso.sinks import TarSink
+    from archcustomiser.core.catalog.loader import load_catalog
+    from archcustomiser.core.config import BuildConfig
+    from archcustomiser.core.resolver import Resolver
+
+    katalog = load_catalog()
+    config = BuildConfig()
+    for ref in ("desktop.none", "kernel.linux", "audio.none", "network.networkmanager"):
+        config.add(ref)
+    config.set_field("branding.distro_name", "FLOS")
+    config.set_field("branding.version", "1.0")
+    config.set_field("basics.hostname", "flos")
+    config.set_field("user.create", True)
+    config.set_field("user.username", "jason")
+    store = SecretStore()
+    store.set("user.password", "geheim123")
+
+    aufloesung = Resolver(katalog).resolve(config)
+    erzeugt = ProfileGenerator(katalog, config, aufloesung, store).generate()
+    baum = getattr(erzeugt, "tree", erzeugt)
+
+    with tarfile.open(fileobj=io.BytesIO(TarSink("profil").to_bytes(baum))) as archiv:
+        modi = {m.name.split("profil/")[-1]: m.mode for m in archiv.getmembers()}
+
+    assert modi["airootfs/etc/shadow"] == 0o400, "der Passwort-Hash liegt wieder offen"
+    assert modi["airootfs/etc/sudoers.d/10-wheel"] == 0o440
+    # Was keine besonderen Rechte anmeldet, bleibt wie bisher.
+    assert modi["airootfs/etc/passwd"] == 0o644
+
+
+def test_a_package_name_from_a_profile_file_is_validated(tmp_path) -> None:
+    """Eine Profildatei ist so wenig vertrauenswuerdig wie eine Tastatureingabe.
+
+    Sie wird weitergegeben; ihre Paketnamen landen in packages.x86_64 und in
+    archinstall.json. Bis zum 07.09.2026 durchliefen sie -- anders als das
+    Freitextfeld -- gar keine Pruefung.
+    """
+    import yaml
+
+    from archcustomiser.core.catalog.loader import load_catalog
+    from archcustomiser.core.profiles import ProfileService
+
+    katalog = load_catalog()
+    datei = tmp_path / "boese.yaml"
+    datei.write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": 1,
+                "name": "boese",
+                "selections": {},
+                "fields": {},
+                "extra_packages": [
+                    "firefox",              # gueltig -- muss bleiben
+                    "firefox>=140",         # gueltig mit Einschraenkung
+                    "--dbpath=/tmp/x",      # Schalter statt Paket
+                    "../../etc/passwd",     # Pfadausbruch
+                    "$(id)",                # Befehlsersetzung
+                    "boes; rm -rf /",       # Shell-Trenner
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    geladen = ProfileService(katalog).load(datei)
+
+    assert "firefox" in geladen.config.extra_packages
+    assert "firefox>=140" in geladen.config.extra_packages, "gueltige Namen duerfen nicht verlorengehen"
+    for boese in ("--dbpath=/tmp/x", "../../etc/passwd", "$(id)", "boes; rm -rf /"):
+        assert boese not in geladen.config.extra_packages, f"{boese!r} kam durch"
+
+    verworfen = [i for i in geladen.issues if i.code == "invalid_package"]
+    assert len(verworfen) == 4, "das Verwerfen wurde dem Benutzer verschwiegen"

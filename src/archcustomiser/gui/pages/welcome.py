@@ -95,6 +95,11 @@ class WelcomePage(QWizardPage):
         self.profiles = profiles
         self.environment = environment
         self._loaded_from: Path | None = None
+        # Welche Auswahl bereits umgesetzt wurde. Ohne diesen Merker
+        # loeschte ein Blaettern zurueck auf die Startseite und wieder
+        # vor die gesamte Zusammenstellung -- validatePage lief erneut
+        # und rief store.reset().
+        self._angewendet: str | None = None
 
         self.setTitle("Willkommen")
         self.setSubTitle(
@@ -198,7 +203,10 @@ class WelcomePage(QWizardPage):
         sich anders entscheidet, soll den Store nicht schon veraendert haben.
         """
         if self.wants_empty():
+            if self._schon_angewendet("leer"):
+                return True
             self.store.reset()
+            self._angewendet = "leer"
             return True
 
         if self.wants_file_dialog():
@@ -207,12 +215,32 @@ class WelcomePage(QWizardPage):
             )
             if not pfad:
                 return False          # abgebrochen -- auf der Seite bleiben
-            return self._load(Path(pfad))
+            if self._load(Path(pfad)):
+                self._angewendet = f"datei:{pfad}"
+                return True
+            return False
 
         info = self.selected_profile()
         if info is None:
             return False
-        return self._load(info.path)
+        if self._schon_angewendet(f"vorlage:{info.path}"):
+            return True
+        if self._load(info.path):
+            self._angewendet = f"vorlage:{info.path}"
+            return True
+        return False
+
+    def _schon_angewendet(self, schluessel: str) -> bool:
+        """Ob dieselbe Auswahl schon einmal umgesetzt wurde.
+
+        Blaettert der Benutzer zurueck auf die Startseite und wieder vor, ist
+        das ein reiner Seitenwechsel und darf nichts verwerfen. Eine ANDERE
+        Auswahl wird weiterhin umgesetzt -- dann will er das ja.
+
+        Die Dateiauswahl ist ausgenommen: dort erscheint ohnehin ein Dialog,
+        und wer denselben Pfad noch einmal auswaehlt, meint das auch so.
+        """
+        return self._angewendet == schluessel
 
     def _load(self, pfad: Path) -> bool:
         try:

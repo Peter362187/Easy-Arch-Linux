@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 from ...core.catalog import Category
 from ...core.resolver import Issue
 from ...core.packages import EntryKind, parse_list
+from ...core.packages.validator import repositories_of
 from .. import theme
 from ..packages_worker import PackageController
 from ..store import SelectionStore
@@ -188,6 +189,12 @@ class FreePackagesPage(CatalogPageBase):
 
             if entry.kind.is_blocking:
                 self._blocking += 1
+
+        # Welche Repositories die eingetippten Pakete brauchen. Der Paketindex
+        # laedt multilib mit, ein "steam" gilt hier also als gefunden -- die
+        # erzeugte pacman.conf kannte das Repository aber nicht, und der Bau
+        # scheiterte erst Minuten spaeter in pacstrap.
+        self.store.set_extra_repositories(repositories_of(report))
 
         self._publish_package_errors(report)
         self.completeChanged.emit()

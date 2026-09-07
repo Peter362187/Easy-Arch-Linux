@@ -59,6 +59,16 @@ class BuildConfig:
     """binding -> Wert. Geheime Felder stehen hier NICHT."""
 
     extra_packages: list[str] = field(default_factory=list)
+
+    extra_repositories: list[str] = field(default_factory=list)
+    """Repositories, die wegen der Freitextpakete noetig sind.
+
+    Ein Paket wie ``lib32-mesa`` liegt in ``[multilib]``. Die Katalogoptionen
+    melden ihre Repositories ueber ``option.repos`` selbst an; das Freitextfeld
+    konnte das bis zum 07.09.2026 nicht -- die Paketpruefung fand ``steam``
+    im Index (der multilib mitlaedt), die erzeugte ``pacman.conf`` kannte das
+    Repository aber nicht, und der Bau scheiterte erst bei pacstrap.
+    """
     provider_choices: dict[str, str] = field(default_factory=dict)
     """Virtuelles Paket -> vom Benutzer gewaehlter Anbieter.
 
@@ -243,6 +253,7 @@ class BuildConfig:
             sources=dict(self.sources),
             fields=dict(self.fields),
             extra_packages=list(self.extra_packages),
+            extra_repositories=list(self.extra_repositories),
             provider_choices=dict(self.provider_choices),
             file_permissions_extra=dict(self.file_permissions_extra),
             unresolved={key: list(value) for key, value in self.unresolved.items()},

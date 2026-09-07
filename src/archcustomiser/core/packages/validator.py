@@ -164,3 +164,32 @@ def validate_all(
         degraded=degraded or index is None,
         problems=tuple(problems),
     )
+
+
+# In jeder Arch-Installation von Haus aus aktiv. Alles andere muss in der
+# erzeugten pacman.conf ausdruecklich eingeschaltet werden.
+STANDARD_REPOS = frozenset({"core", "extra"})
+
+
+def repositories_of(report: ValidationReport) -> tuple[str, ...]:
+    """Welche zusaetzlichen Repositories die geprueften Pakete brauchen.
+
+    Der Paketindex laedt ``multilib`` mit -- ein ``lib32-mesa`` oder ``steam``
+    im Freitextfeld gilt deshalb als gefunden. Die erzeugte ``pacman.conf``
+    kannte das Repository aber nicht, und der Bau scheiterte erst Minuten
+    spaeter in pacstrap mit "target not found".
+
+    Nur wirklich gefundene Pakete zaehlen: ein ungeprueftes Paket (ohne
+    Paketdaten) hat kein Repository, und daraus laesst sich auch keines raten.
+    """
+    return tuple(
+        sorted(
+            {
+                eintrag.repo
+                for eintrag in report.entries
+                if eintrag.kind is EntryKind.PACKAGE
+                and eintrag.repo
+                and eintrag.repo not in STANDARD_REPOS
+            }
+        )
+    )

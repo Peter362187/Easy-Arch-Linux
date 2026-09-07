@@ -235,7 +235,7 @@ Einzelheiten im Abschnitt [Passwort-Hash](#passwort-hash) weiter unten.
 
 ## Tests
 
-530 Tests, ohne Netzwerk und ohne Bildschirm.
+553 Tests, ohne Netzwerk und ohne Bildschirm.
 
 * **`build_fake_syncdb()`** erzeugt echte `tar.gz`-Archive im ALPM-Format, keine
   Attrappen. So fällt eine Formatänderung bei pacman auf.
@@ -484,6 +484,73 @@ anlegen will und das Ziel fehlt. Gegenprobe: das **offizielle
 archiso-Repository** erzeugt beim Entpacken unter Windows exakt dieselben
 Meldungen. Das Archiv ist korrekt; nur das Entpacken gehört auf das
 Linux-System.
+
+---
+
+## Durchsicht vom 07.09.2026
+
+Zwanzig gemeldete Punkte, jeder am Quelltext geprüft. **Zwei waren falsch** —
+und die Widerlegungen sind wertvoller als die Reparaturen, weil sie sonst
+irgendwann erneut „behoben" würden:
+
+* **`de_DE.UTF-8.UTF-8`.** Gemeldet als doppelte Endung im archinstall-Locale.
+  Der Code hängt aber nirgends `sys_enc` an `sys_lang` an, und archinstalls
+  `set_locale()` trennt ausdrücklich am Punkt: aus `de_DE.UTF-8` wird
+  `lang='de_DE'`, `encoding='UTF-8'`, und der erzeugte Ausdruck
+  `#de_DE(\.UTF-8)? UTF-8` trifft die Zeile in `/etc/locale.gen`. Beide
+  Schreibweisen funktionieren.
+* **`"$@"` unter `set -u` in bash 3.2.** Den Abbruch gab es **nur in bash
+  4.0.x**; Chet Ramey baute ihn in 4.0 ein und nahm ihn in 4.1-alpha wieder
+  heraus, nachdem die Austin Group klarstellte, dass `$@` und `$*` ausgenommen
+  sind. bash 3.2 (die Fassung, die macOS als `/bin/sh` ausliefert) ist *älter*
+  als dieser Einbau und kennt den Fehlerpfad nicht. `${1+"$@"}` schützt gegen
+  ein anderes, vor-POSIX-Problem und ist hier unnötig.
+
+### Der Container-Weg konnte nie funktionieren
+
+Zwei voneinander unabhängige Fehler, die sich gegenseitig verdeckten:
+
+1. `build_image()` rief `podman build --file - .` auf — „Containerfile von
+   stdin". Übergeben wurde es nie: `_run()` kennt kein `input=`. Die Engine
+   erbte damit das stdin des Programms und wartete aus einem Terminal bis zum
+   Zeitlimit von 1800 s, aus der Oberfläche las sie sofort EOF.
+2. `ensure_image()` wurde im ganzen Programm von niemandem gerufen. Die
+   Vorabprüfung meldete „wird beim ersten Bau erzeugt" — ein Versprechen, das
+   niemand einlöste.
+
+Beides ist behoben; das Containerfile geht jetzt über ein Wegwerfverzeichnis,
+das zugleich der Baukontext ist (vorher `.`, also der ganze Projektordner).
+`ContainerError` erbt seither von `BuildError`, weil `controller.run` nur
+diesen fängt — und daran hängt das Schreiben der Protokolldatei.
+
+### Wo Anzeige und Ergebnis auseinanderliefen
+
+`SelectionStore.replace_config()` trug beim Laden eines Profils keine
+Katalogvorgaben nach, `reset()` dagegen schon. Ein Formularfeld ohne Wert zeigt
+die Vorgabe an — die Konfiguration blieb leer. Bei `minimal.yaml` sah der
+Benutzer deshalb den Benutzer „arch", und die erzeugte ISO hatte gar kein
+Konto; bei gesperrtem Root-Konto also **niemanden, der sich anmelden konnte**.
+Seither füllt `replace_config` fehlende Felder nach (nur fehlende — ein leerer
+Wert im Profil kann gewollt sein), und `airootfs.py` meldet den Fall
+ausdrücklich, wenn er trotzdem eintritt.
+
+### Multilib: gefunden, aber nicht installierbar
+
+Der Paketindex lädt `multilib` mit, ein eingetipptes `steam` galt also als
+gefunden. Die erzeugte `pacman.conf` kannte das Repository nicht, und der Bau
+scheiterte erst Minuten später in pacstrap. `config.extra_repositories` wird
+jetzt aus der Paketprüfung abgeleitet (`validator.repositories_of`), im Profil
+gespeichert und vom Resolver in `pacman.conf` **und** `archinstall.json`
+durchgereicht.
+
+### Ein Teilindex ist kein Index
+
+Fiel beim Laden ein einzelnes Repository aus, meldete `PackageService`
+trotzdem „alles gut" — und jedes Paket aus dem fehlenden Repository galt als
+`NOT_FOUND`: rot, blockierend, „in den offiziellen Repositories nicht
+gefunden". Genau der Fehler, den Entscheidung 3 oben verhindern soll. Jetzt
+wird gegen `config.repos` abgeglichen; fehlt etwas, gilt der Index als
+`degraded`, und die Prüfung liefert `UNVERIFIED` statt `NOT_FOUND`.
 
 ---
 

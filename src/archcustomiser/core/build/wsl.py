@@ -38,6 +38,12 @@ from .errors import BuildError
 
 log = logging.getLogger(__name__)
 
+# Unter Windows oeffnet jeder Unterprozess sonst kurz ein schwarzes
+# Konsolenfenster -- bei einem Bau mit vielen Aufrufen flackert der
+# Bildschirm. Auf allen anderen Systemen ist die Kennzahl 0, also wirkungslos.
+KEIN_FENSTER = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
 # wsl.exe meldet das, wenn das Subsystem gar nicht eingerichtet ist.
 EXIT_NOT_INSTALLED = 50
 
@@ -201,6 +207,7 @@ def _run_management(arguments: Sequence[str], timeout: float = DEFAULT_TIMEOUT):
             timeout=timeout,
             check=False,
             shell=False,
+            creationflags=KEIN_FENSTER,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise WslNotAvailable(f"{executable}: {exc}") from exc
@@ -359,6 +366,7 @@ class WslTarget:
                 timeout=timeout,
                 check=False,
                 shell=False,
+                creationflags=KEIN_FENSTER,
             )
         except (OSError, subprocess.SubprocessError) as exc:
             raise WslError(f"Der Aufruf in WSL ist fehlgeschlagen: {exc}") from exc

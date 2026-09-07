@@ -172,6 +172,17 @@ def _user(
             "unmittelbarer Administratorzugang."
         )
 
+    # Der umgekehrte Fall, der bis zum 07.09.2026 unbemerkt blieb: kein Konto
+    # UND ein gesperrtes Root-Konto ergibt eine ISO, die startet, einen
+    # Anmeldeschirm zeigt -- und in die niemand hineinkommt. Nicht gefaehrlich,
+    # aber unbrauchbar, und ohne Hinweis merkt man es erst nach dem Brennen.
+    if root_locked and not config.creates_user:
+        tree.note(
+            "Es wird kein Benutzerkonto angelegt und das Root-Konto ist gesperrt "
+            "-- an dieser ISO kann sich niemand anmelden. Entweder ein "
+            "Benutzerkonto anlegen oder das Root-Konto entsperren."
+        )
+
     if config.creates_user:
         account = UserAccount(
             username=config.username,

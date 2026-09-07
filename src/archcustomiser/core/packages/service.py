@@ -106,8 +106,38 @@ class PackageService:
             self._index = self.backend.load_index(
                 policy=policy, progress=progress, cancel=cancel
             )
-            self._degraded = False
-            self._problems = ()
+            # Ein Teilindex ist kein vollstaendiger Index. Faellt beim Laden
+            # ein einzelnes Repository aus -- multilib etwa, weil der Spiegel
+            # gerade 503 liefert --, meldete der Dienst trotzdem "alles gut",
+            # und die Pruefung stufte jedes Paket aus dem fehlenden Repository
+            # als NOT_FOUND ein: rot, blockierend, "in den offiziellen
+            # Repositories nicht gefunden". Der Benutzer haette daraufhin einen
+            # voellig korrekten Paketnamen geloescht.
+            #
+            # Als "degraded" gemeldet, liefert die Pruefung stattdessen
+            # UNVERIFIED -- nicht blockierend, ehrlich beschriftet. Das ist
+            # genau der Zustand, fuer den dieser Weg gedacht ist.
+            fehlend = tuple(
+                repo
+                for repo in self.config.repos
+                if repo not in self._index.meta.repo_names
+            )
+            if fehlend:
+                self._degraded = True
+                self._problems = (
+                    BackendProblem(
+                        repo=fehlend[0],
+                        message=(
+                            f"Die Paketdaten fuer {', '.join(fehlend)} liessen sich "
+                            f"nicht laden. Namen aus diesen Repositories werden "
+                            f"nicht geprueft."
+                        ),
+                    ),
+                )
+                log.warning("Teilindex: %s fehlt", ", ".join(fehlend))
+            else:
+                self._degraded = False
+                self._problems = ()
             log.info("Paketdaten bereit: %s", self._index.describe())
             return self._index
         except PackageLayerError as exc:

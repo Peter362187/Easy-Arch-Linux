@@ -35,10 +35,19 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from typing import Sequence
 
+from .errors import BuildError
+
 log = logging.getLogger(__name__)
+
+# Unter Windows oeffnet jeder Unterprozess sonst kurz ein schwarzes
+# Konsolenfenster -- bei einem Bau mit vielen Aufrufen flackert der
+# Bildschirm. Auf allen anderen Systemen ist die Kennzahl 0, also wirkungslos.
+KEIN_FENSTER = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
 
 # podman zuerst: kein Hintergrunddienst, unter Fedora vorinstalliert, und der
 # Container laeuft als der aufrufende Benutzer. Dockers Daemon laeuft als root,
@@ -60,12 +69,20 @@ DEFAULT_TIMEOUT = 120.0
 IMAGE_BUILD_TIMEOUT = 1800.0
 
 
-class ContainerError(Exception):
-    """Etwas mit der Container-Umgebung stimmt nicht."""
+class ContainerError(BuildError):
+    """Etwas mit der Container-Umgebung stimmt nicht.
+
+    Erbt bewusst von ``BuildError``: ``controller.run`` faengt nur
+    ``(BuildError, ProfileError)``, und genau daran haengt das Schreiben der
+    Protokolldatei. Als blosse ``Exception`` rutschte ein gescheiterter
+    Container-Bau daran vorbei -- der Benutzer bekam eine Fehlermeldung, aber
+    kein Protokoll, mit dem sich etwas anfangen liesse.
+    """
 
     def __init__(self, user_message: str, technical: str = "") -> None:
-        super().__init__(user_message)
-        self.user_message = user_message
+        super().__init__(user_message, technical)
+        # BuildError setzt technical auf user_message, wenn nichts angegeben
+        # ist. Hier soll ein leerer technischer Teil leer bleiben.
         self.technical = technical
 
 
@@ -115,6 +132,7 @@ def _run(argv: Sequence[str], *, timeout: float = DEFAULT_TIMEOUT) -> ContainerR
             timeout=timeout,
             check=False,
             shell=False,
+            creationflags=KEIN_FENSTER,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise ContainerError(
@@ -241,15 +259,28 @@ class ContainerTarget:
     def build_image(self, on_line=None) -> None:
         """Baut das Abbild einmalig aus dem offiziellen archlinux-Abbild.
 
-        Ueber stdin statt ueber eine Datei auf der Platte: dann gibt es keinen
-        Bauordner, der aufgeraeumt werden muesste, und nichts, was zwischen
-        zwei Laeufen veralten kann.
+        Frueher stand hier ``--file -``, also "Containerfile von stdin" -- nur
+        wurde ``CONTAINERFILE`` nirgends uebergeben. ``_run`` kennt kein
+        ``input=``, also erbte die Engine das stdin des Programms: aus einem
+        Terminal gestartet wartete sie bis zum Zeitlimit von 1800 Sekunden, aus
+        der Oberflaeche gestartet las sie sofort EOF und brach mit "no FROM
+        statement" ab. Der Container-Weg konnte so nie funktionieren.
+
+        Jetzt geht es ueber ein Wegwerfverzeichnis. Das raeumt sich selbst auf
+        -- der urspruengliche Einwand gegen eine Datei auf der Platte bleibt
+        also erfuellt -- und nebenbei ist der Bauzusammenhang nicht mehr das
+        Arbeitsverzeichnis des Programms, das sonst vollstaendig an die Engine
+        geschickt wuerde.
         """
         log.info("Container-Abbild %s wird gebaut", self.image)
-        ergebnis = self._runner(
-            [self.engine, "build", "--tag", self.image, "--file", "-", "."],
-            timeout=IMAGE_BUILD_TIMEOUT,
-        )
+        with tempfile.TemporaryDirectory(prefix="archcustomiser-abbild-") as ordner:
+            datei = os.path.join(ordner, "Containerfile")
+            with open(datei, "w", encoding="utf-8", newline="\n") as ziel:
+                ziel.write(CONTAINERFILE)
+            ergebnis = self._runner(
+                [self.engine, "build", "--tag", self.image, "--file", datei, ordner],
+                timeout=IMAGE_BUILD_TIMEOUT,
+            )
         if not ergebnis.ok:
             raise ContainerError(
                 "Das Container-Abbild liess sich nicht bauen. Meist fehlt die "

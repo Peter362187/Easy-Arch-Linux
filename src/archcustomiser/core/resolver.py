@@ -548,6 +548,11 @@ class Resolver:
         for name in config.extra_packages:
             packages.setdefault(name, []).append("extra_packages")
 
+        # Was die Freitextpakete an Repositories brauchen. Katalogoptionen
+        # melden das ueber option.repos; fuer das Freitextfeld ermittelt es die
+        # Paketpruefung und legt es hier ab.
+        repositories.update(config.extra_repositories)
+
         # Vom Benutzer gewaehlte Anbieter virtueller Pakete ersetzen den
         # virtuellen Namen -- pacman wuerde sonst interaktiv nachfragen und im
         # nicht-interaktiven Build abbrechen.

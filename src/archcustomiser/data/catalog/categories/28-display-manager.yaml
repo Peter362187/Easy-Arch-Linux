@@ -80,4 +80,4 @@ options:
         owned_by: display_manager
         package: lightdm
     semantics:
-      profile_config.greeter: "lightdm"
+      profile_config.greeter: "lightdm-gtk-greeter"   # archinstall-Enum, nicht der Paketname
