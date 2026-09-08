@@ -12,7 +12,8 @@ die Signale, und ``core`` soll ohne Qt importierbar und testbar bleiben.
 from __future__ import annotations
 
 import logging
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any
 
 from PySide6.QtCore import QObject, Signal
 
@@ -35,7 +36,7 @@ class StoreContext:
 
     __slots__ = ("store",)
 
-    def __init__(self, store: "SelectionStore") -> None:
+    def __init__(self, store: SelectionStore) -> None:
         self.store = store
 
     def is_selected(self, ref: str) -> bool:
@@ -70,6 +71,8 @@ class SelectionStore(QObject):
         self._config = config or BuildConfig(catalog_version=catalog.catalog_version)
         self._resolution: Resolution | None = None
         self._applying = False        # verhindert Signalschleifen
+        # Von der Paketpruefung nachgereicht (set_package_report).
+        self._paket_repositories: tuple[str, ...] = ()
         if config is None:
             self._apply_defaults()
         self._recompute()
@@ -223,23 +226,25 @@ class SelectionStore(QObject):
 
     # -- Konfiguration ersetzen ----------------------------------------------
     def replace_config(self, config: BuildConfig) -> None:
-        """Beim Laden eines Profils."""
+        """Beim Laden eines Profils.
+
+        Fehlende **Felder** bekommen die Vorgabe aus dem Katalog. Ohne das
+        klafften Anzeige und Ergebnis auseinander: ein Profil ohne
+        ``user.*`` -- etwa das mitgelieferte ``minimal.yaml`` -- zeigte im
+        Formular "Benutzerkonto anlegen" und den Namen "arch", weil die Seite
+        ``spec.default`` anzeigt. ``BuildConfig`` kannte den Wert aber nicht,
+        also legte der Generator kein Konto an und sperrte zugleich root: eine
+        Live-ISO, an der sich niemand anmelden kann.
+
+        Fehlende **Auswahlen** bekommen bewusst *keine* Vorgabe: die steuert
+        das Profil, und ein leeres Feld dort heisst "nicht gewaehlt".
+        """
         self._applying = True
         try:
             self._config = config
             self._config.catalog_version = self.catalog.catalog_version
             self.secrets.clear()
-            # Katalogvorgaben fuer alles nachtragen, was das Profil nicht
-            # nennt. Ohne das liefen Anzeige und Ergebnis auseinander: die
-            # Formularfelder zeigen bei fehlendem Wert die Katalogvorgabe an,
-            # die Konfiguration blieb aber leer. Bei minimal.yaml sah der
-            # Benutzer deshalb "Benutzerkonto anlegen: arch", und die fertige
-            # ISO hatte gar kein Konto -- bei gesperrtem Root also niemanden,
-            # der sich anmelden koennte.
-            #
-            # Nur fehlende Felder, keine Auswahlen: eine leere Auswahl kann im
-            # Profil ausdruecklich gemeint sein, ein fehlendes Feld nicht.
-            self._fill_missing_field_defaults()
+            self._fill_missing_fields()
         finally:
             self._applying = False
         self._recompute()
@@ -256,20 +261,14 @@ class SelectionStore(QObject):
             self.selectionChanged.emit(category.id)
 
     # -- intern ---------------------------------------------------------------
-    def _fill_missing_field_defaults(self) -> None:
-        """Katalogvorgaben nur dort, wo das Profil schweigt.
-
-        Was das Profil sagt, bleibt unangetastet -- auch ein leerer Wert, denn
-        der kann gewollt sein. Geheimfelder bleiben aussen vor; die gehoeren
-        nie in eine Konfiguration.
-        """
+    def _fill_missing_fields(self) -> None:
+        """Katalog-Vorgaben fuer Felder, die das Profil nicht nennt."""
         for category in self.catalog.categories:
             for spec in category.fields:
                 if spec.default is None or spec.secret:
                     continue
-                if spec.binding in self._config.fields:
-                    continue
-                self._config.set_field(spec.binding, spec.default)
+                if self._config.field(spec.binding) is None:
+                    self._config.set_field(spec.binding, spec.default)
 
     def _apply_defaults(self) -> None:
         for category in self.catalog.categories:
@@ -281,9 +280,25 @@ class SelectionStore(QObject):
                 if spec.default is not None and not spec.secret:
                     self._config.set_field(spec.binding, spec.default)
 
+    def set_package_report(self, report) -> None:
+        """Uebernimmt, was die Paketpruefung ueber die Repositorien weiss.
+
+        Die Aufloesung kennt nur die Repositorien, die der Katalog an seinen
+        Optionen nennt. Ein frei eingegebenes multilib-Paket blieb damit ohne
+        aktiviertes Repository in der erzeugten pacman.conf -- der Bau brach
+        erst nach Minuten mit "target not found" ab.
+        """
+        neue = tuple(report.required_repositories()) if report is not None else ()
+        if neue == self._paket_repositories:
+            return
+        self._paket_repositories = neue
+        self._recompute()
+
     def _recompute(self) -> None:
         previous = self._resolution
-        self._resolution = self.resolver.resolve(self._config)
+        self._resolution = self.resolver.resolve(self._config).mit_repositories(
+            self._paket_repositories
+        )
         if previous is None or previous.issues != self._resolution.issues:
             self.issuesChanged.emit()
         self.resolutionChanged.emit()

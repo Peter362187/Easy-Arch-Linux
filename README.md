@@ -4,7 +4,10 @@
 
 Wenn du zu faul oder zu blöd bist um dir Arch Linux selber einzurichten ist das eine wahre Goldgrube für dich.
 Dieses Tool ermöglicht es dir eine Bootfähige Arch ISO Datei zu erstellen die du schön und einfach mit clicky bunti customisen kannst, wenn du fertig bist kannst du endlich jedem sagen das du Arch Linux verwendest obwohl du keinen Plan hast was du eigendlich tust.
-Eine bessere und genauere Anleitung gibt es hier:
+Eine bessere und genauere Anleitung gibt es weiter unten in dieser Datei —
+[Installation](#installation), [Verwendung](#verwendung) und
+[Vom Wizard zur ISO](#vom-wizard-zur-iso). Wer wissen will, wie das Ding innen
+aussieht: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 Grafischer Builder für eigene, auf Arch Linux basierende Live-ISOs.
 
@@ -17,6 +20,27 @@ Das Programm baut Arch Linux **nicht nach**. Es ist eine Automatisierungsschicht
 über der offiziellen Infrastruktur: `archiso`, `pacman`, die offiziellen
 Repositories, `systemd` und `archinstall`. Die Abhängigkeitsauflösung macht
 pacman, nicht dieses Programm.
+
+![Die Auswahlseite für Programme](docs/screenshots/dunkel-apps.png)
+
+Links die Schrittliste mit dem, was schon erledigt ist und was gar nicht
+zutrifft. Rechts durchgehend die Antwort auf „was landet eigentlich in meiner
+ISO". In der Mitte die eigentliche Auswahl.
+
+<details>
+<summary>Mehr Bilder</summary>
+
+| | |
+|---|---|
+| Startseite | ![Startseite](docs/screenshots/dunkel-welcome.png) |
+| Branding mit Live-Vorschau | ![Branding](docs/screenshots/dunkel-branding.png) |
+| Zusammenfassung | ![Zusammenfassung](docs/screenshots/dunkel-summary.png) |
+| Hell statt dunkel | ![Hell](docs/screenshots/hell-apps.png) |
+
+Alle Bilder entstehen offscreen mit `python tools/gallery.py` und lassen sich
+jederzeit neu erzeugen.
+
+</details>
 
 ---
 
@@ -32,8 +56,8 @@ pacman, nicht dieses Programm.
 | 6 | ISO-Build ausführen (`mkarchiso` starten) | fertig |
 | 7 | Logging und Fehlerbehandlung | fertig |
 | 8 | Branding | fertig |
-| 9 | Tests | laufend (561) |
-| 10 | UI/UX und Dokumentation | laufend |
+| 9 | Tests | laufend (über 700) |
+| 10 | UI/UX und Dokumentation | Oberfläche neu gebaut, Doku laufend |
 
 **Der Funktionsumfang ist vollständig:** Wizard, Profile, Paketprüfung, Dry-Run,
 Profilerzeugung und der ISO-Build mit Fortschrittsanzeige, Abbruch und Protokoll.
@@ -194,7 +218,7 @@ Spielen realistisch 25–40 GB und muss auf einem Linux-Dateisystem liegen.
    entpacken. Wer git nutzt, klont stattdessen:
 
    ```bash
-   git clone https://github.com/Peter362187/ArchCustomiser.git
+   git clone https://github.com/Peter362187/Easy-Arch-Linux.git
    ```
 
 2. Im entpackten Ordner **`ArchCustomiser.bat` doppelklicken.**
@@ -223,7 +247,7 @@ erneut doppelklicken. Damit wird die Einrichtung von vorn gemacht.
 ### Linux und macOS — der einfache Weg
 
 ```bash
-git clone https://github.com/Peter362187/ArchCustomiser.git && cd ArchCustomiser
+git clone https://github.com/Peter362187/Easy-Arch-Linux.git && cd Easy-Arch-Linux
 ```
 
 ```bash
@@ -252,7 +276,7 @@ python -m venv .venv && .venv/bin/pip install -e ".[dev]"
 Alternativ ohne Quellordner, direkt aus dem Repository:
 
 ```bash
-pipx install git+https://github.com/Peter362187/ArchCustomiser.git
+pipx install git+https://github.com/Peter362187/Easy-Arch-Linux.git
 ```
 
 Danach startet `archcustomiser` die Oberfläche.
@@ -287,9 +311,50 @@ python -m archcustomiser --dry-run src/archcustomiser/profiles/gaming.yaml
 python -m archcustomiser --export-profile src/archcustomiser/profiles/gaming.yaml --out ~/flos-profil.tar.gz
 ```
 
-Der Wizard führt durch eine Startseite und vierzehn Schritte. Seiten, die nicht zutreffen, werden
-übersprungen — ohne Desktop und ohne Window Manager erscheint zum Beispiel die
-Treiberseite gar nicht erst.
+Und ohne jeden Bildschirm — für einen Server, eine SSH-Sitzung oder ein Skript,
+das nachts baut:
+
+```bash
+python -m archcustomiser --build ~/mein-profil.yaml --out-dir ~/isos
+```
+
+Der Fortschritt geht nach stderr, die Zusammenfassung nach stdout; `--build … >
+ergebnis.txt` enthält also die Zusammenfassung und nicht dreitausend
+mkarchiso-Zeilen. `Strg+C` bricht den Bau ab, statt ihn zu erschlagen. Ein
+Passwort kommt über die Standardeingabe und nie über ein Argument — dort stünde
+es unter Linux für jeden lesbar in `/proc`:
+
+```bash
+pass show arch/live | python -m archcustomiser --build profil.yaml --password-stdin
+```
+
+Rückgabewerte: `0` fertig, `1` fehlgeschlagen, `2` falsche Eingabe, `3`
+abgebrochen, `4` Vorabprüfung blockiert.
+
+Zwei kleine Helfer:
+
+```bash
+python -m archcustomiser --verify-iso ~/isos/flos-1.0-x86_64.iso
+python -m archcustomiser --history
+```
+
+Der erste prüft eine vorhandene ISO auf Plausibilität — CD001-Signatur,
+MBR-Signatur, El-Torito-Bootkatalog, Sektorausrichtung —, der zweite listet,
+was auf diesem Rechner schon gebaut wurde.
+
+Das Programm führt durch eine Startseite und vierzehn Schritte. Schritte, die
+nicht zutreffen, erscheinen in der Schrittliste als **übersprungen** — ohne
+Desktop und ohne Window Manager zum Beispiel die Treiberseite. Anklickbar ist
+jeder Schritt, auch vorwärts: die Seiten holen ihren Inhalt ohnehin aus der
+Auswahl, und wer weiß, was er will, soll sich nicht durchklicken müssen.
+
+Rechts steht durchgehend, **was in der ISO landen wird**: Paketzahl und
+Herkunft, Repositorien, Dienste, geschätzte Größe, der abgeleitete Dateiname.
+Diese Frage wurde vorher genau einmal beantwortet — auf der letzten Seite.
+
+Tastatur: `Strg+O` lädt ein Profil, `Strg+S` speichert, `Strg+F` springt in die
+Suche der aktuellen Seite, `Strg+Return` geht weiter, `Strg+D` schaltet zwischen
+Hell und Dunkel.
 
 ---
 
@@ -515,14 +580,19 @@ src/archcustomiser/
 │   ├── environment.py       Werkzeug- und Rechteerkennung
 │   ├── secrets.py           Passwortbehandlung
 │   └── logging_setup.py     Logging mit Maskierung
+│   └── history.py           was auf diesem Rechner schon gebaut wurde
 ├── gui/                     PySide6
 │   ├── store.py             einzige Stelle, die Konfiguration verändert
-│   ├── wizard.py            QWizard, Seitenreihenfolge, Profile
-│   └── pages/               vier generische Seitentypen
+│   ├── navigation.py        Schrittmodell -- ohne Qt, ohne Bildschirm prüfbar
+│   ├── main_window.py       Kopfzeile, Schrittliste, Seitenstapel, ISO-Panel
+│   ├── design/              Farben, Abstände, Schrift, Erscheinungswechsel
+│   ├── widgets/             selbst gezeichnete Bausteine
+│   ├── previews/            Vorschauen, über den Katalog zugeordnet
+│   └── pages/               vier generische Seitentypen plus Start und Bau
 ├── data/catalog/            der gesamte Optionsumfang als YAML
 └── profiles/                mitgelieferte Profile
 
-tests/                       561 Tests, ohne Netz und ohne Bildschirm
+tests/                       über 700 Tests, ohne Netz und ohne Bildschirm
 tools/                       Hilfsskripte für die Entwicklung
 ArchCustomiser.bat           Doppelklick-Start, richtet sich selbst ein
 ```
@@ -554,11 +624,20 @@ Die Testsuite läuft ohne Netzwerkzugriff und ohne Bildschirm. Der ALPM-Parser
 wird gegen **echte** `tar.gz`-Archive geprüft, nicht gegen Attrappen — so fällt
 eine Formatänderung bei pacman auf.
 
-```bash
-.venv/bin/python -m pytest -m network
-```
+Die Oberfläche wird dabei **offscreen** gezeichnet (`QT_QPA_PLATFORM=offscreen`)
+— es geht kein Fenster auf, und die Tests laufen auch über SSH.
 
-Zusätzliche Tests gegen die echten Arch-Server; standardmäßig abgewählt.
+Denselben Lauf macht [GitHub Actions](.github/workflows/ci.yml) bei jedem Push:
+Ubuntu, Windows und macOS × Python 3.11 bis 3.13, dazu `ruff`, `mypy` und ein
+Lauf, der `core/` **ohne installiertes PySide6** importiert — wäre Qt da, könnte
+ein versehentlicher Import unbemerkt durchgehen.
+
+Bildschirmfotos entstehen ebenfalls offscreen und lassen sich jederzeit neu
+erzeugen:
+
+```bash
+python tools/gallery.py
+```
 
 ---
 

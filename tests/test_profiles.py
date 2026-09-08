@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
+import pytest
 import yaml
 
-import pytest
-
-from archcustomiser.core.config import SCHEMA_VERSION, BuildConfig, SelectionSource
+from archcustomiser.core.config import SCHEMA_VERSION, BuildConfig
 from archcustomiser.core.profiles import ProfileError, ProfileService
 
 

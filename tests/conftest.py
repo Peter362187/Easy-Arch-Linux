@@ -8,18 +8,17 @@ tatsaechlich kein Prozess gestartet und keine Verbindung geoeffnet wurde.
 
 from __future__ import annotations
 
-import gzip
 import io
 import tarfile
-from datetime import datetime, timezone
+from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 import pytest
 
 from archcustomiser.core.packages.runner import CommandResult
 from archcustomiser.core.packages.transport import HttpResponse
-
 
 # ---------------------------------------------------------------------------
 # Echte ALPM-Datenbanken erzeugen
@@ -87,8 +86,8 @@ def sample_index(sample_db_bytes: bytes):
             RepoMeta(
                 name="extra",
                 source="test",
-                fetched_at=datetime.now(timezone.utc),
-                last_modified=datetime.now(timezone.utc),
+                fetched_at=datetime.now(UTC),
+                last_modified=datetime.now(UTC),
                 package_count=len(packages),
             ),
         ),
@@ -176,3 +175,77 @@ def profiles_dir() -> Path:
     from archcustomiser.core.paths import bundled_profiles_dir
 
     return bundled_profiles_dir()
+
+
+# ---------------------------------------------------------------------------
+# Der Rechner des Entwicklers bleibt unberuehrt
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _eigene_verzeichnisse(tmp_path_factory):
+    """Lenkt Konfigurations-, Zustands- und Zwischenspeicherpfade um.
+
+    Ohne diese Umlenkung schrieben die Controller-Tests ihre Bauprotokolle in
+    das *echte* Zustandsverzeichnis des Benutzers -- und ``_prune_build_logs``
+    loeschte dort bei jedem Lauf die aeltesten echten Protokolle. Genauso
+    haetten Overlay-Kataloge unter ``~/.config`` die Ergebnisse verfaelscht.
+
+    Session-weit und ``autouse``: eine einzelne vergessene Markierung reichte
+    sonst, um die Zusicherung wieder zu verlieren.
+    """
+    import os
+
+    wurzel = tmp_path_factory.mktemp("benutzer")
+    alt = {}
+    variablen = {
+        "HOME": str(wurzel),
+        "USERPROFILE": str(wurzel),
+        "LOCALAPPDATA": str(wurzel / "Local"),
+        "APPDATA": str(wurzel / "Roaming"),
+        "XDG_CONFIG_HOME": str(wurzel / "config"),
+        "XDG_STATE_HOME": str(wurzel / "state"),
+        "XDG_CACHE_HOME": str(wurzel / "cache"),
+    }
+    for name, wert in variablen.items():
+        alt[name] = os.environ.get(name)
+        os.environ[name] = wert
+    try:
+        yield wurzel
+    finally:
+        for name, wert in alt.items():
+            if wert is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = wert
+
+
+@pytest.fixture(scope="session")
+def symlinks_moeglich(tmp_path_factory) -> bool:
+    """Ob dieses System symbolische Verknuepfungen anlegen kann.
+
+    Windows verlangt dafuer den Entwicklermodus oder Administratorrechte. Ohne
+    sie scheitert jeder Test, der ein Profil als Verzeichnis schreibt -- und
+    zwar an der Umgebung, nicht am Code. Ein gezielter Skip ist ehrlicher als
+    elf rote Tests, die nichts ueber das Programm aussagen.
+    """
+    import os
+
+    verzeichnis = tmp_path_factory.mktemp("symlinkprobe")
+    ziel = verzeichnis / "ziel.txt"
+    ziel.write_text("x", encoding="utf-8")
+    try:
+        os.symlink(ziel, verzeichnis / "verknuepfung")
+    except (OSError, NotImplementedError):
+        return False
+    return True
+
+
+@pytest.fixture
+def braucht_symlinks(symlinks_moeglich: bool) -> None:
+    if not symlinks_moeglich:
+        pytest.skip(
+            "Dieses System kann keine symbolischen Verknuepfungen anlegen "
+            "(Windows ohne Entwicklermodus). Der Profilbaum selbst wird von "
+            "den TarSink-Tests geprueft."
+        )

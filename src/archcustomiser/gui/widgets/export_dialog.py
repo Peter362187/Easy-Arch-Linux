@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from ...core.archiso import GeneratedProfile
-from .. import theme
+from ..design.typo import CAPTION, SUBTITLE, mono, schrift
 from .common import copy_to_clipboard, open_path
 
 log = logging.getLogger(__name__)
@@ -52,10 +52,7 @@ class ExportResultDialog(QDialog):
         layout.setSpacing(10)
 
         headline = QLabel(f"Das Profil fuer {profile.iso_filename} wurde erzeugt.")
-        font = headline.font()
-        font.setBold(True)
-        font.setPointSize(font.pointSize() + 1)
-        headline.setFont(font)
+        headline.setFont(schrift(SUBTITLE, fett=True))
         headline.setWordWrap(True)
         layout.addWidget(headline)
 
@@ -64,7 +61,7 @@ class ExportResultDialog(QDialog):
             f"{profile.tree.symlink_count} Verknuepfungen\n{target}"
         )
         facts.setWordWrap(True)
-        facts.setStyleSheet(f"color: {theme.muted()};")
+        facts.setProperty("rolle", "gedaempft")
         layout.addWidget(facts)
 
         if profile.warnings:
@@ -80,7 +77,7 @@ class ExportResultDialog(QDialog):
         steps = _next_steps(target, profile, as_archive=as_archive)
         self.commands = QPlainTextEdit(steps)
         self.commands.setReadOnly(True)
-        self.commands.setFont(theme.mono_font())
+        self.commands.setFont(mono())
         self.commands.setMinimumHeight(120)
         self.commands.setMaximumHeight(260)
         layout.addWidget(self.commands)
@@ -107,8 +104,8 @@ class ExportResultDialog(QDialog):
             )
         hint = QLabel("\n\n".join(hints))
         hint.setWordWrap(True)
-        hint.setFont(theme.small_font())
-        hint.setStyleSheet(f"color: {theme.muted()};")
+        hint.setFont(schrift(CAPTION))
+        hint.setProperty("rolle", "gedaempft")
         layout.addWidget(hint)
 
         buttons = QHBoxLayout()
@@ -180,13 +177,13 @@ class ErrorDialog(QDialog):
         if causes:
             layout.addWidget(QLabel("Moegliche Ursachen:"))
             for cause in causes:
-                item = QLabel(f"  •  {cause}")
+                item = QLabel(f"  -  {cause}")
                 item.setWordWrap(True)
                 layout.addWidget(item)
 
         self.details = QPlainTextEdit(technical)
         self.details.setReadOnly(True)
-        self.details.setFont(theme.mono_font())
+        self.details.setFont(mono())
         self.details.setMinimumHeight(120)
         self.details.setMaximumHeight(260)
         self.details.setVisible(False)

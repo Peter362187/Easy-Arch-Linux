@@ -14,20 +14,20 @@ from __future__ import annotations
 import logging
 import shutil
 import sys
-from datetime import timedelta, timezone
-from typing import Sequence
+from collections.abc import Sequence
+from datetime import timedelta
 
 from .aur import AurClient
 from .backend import (
     CancelCallback,
-    DependencyPreview,
     PackageBackend,
     PackageConfig,
     ProgressCallback,
     RefreshPolicy,
     SupportsDependencyPreview,
 )
-from .backend_pacman import PacmanSyncBackend, is_available as pacman_available, read_pacman_repos
+from .backend_pacman import PacmanSyncBackend, read_pacman_repos
+from .backend_pacman import is_available as pacman_available
 from .backend_remote import RemoteIndexBackend
 from .errors import PackageLayerError
 from .index import RepoIndex

@@ -25,19 +25,21 @@ Die drei Umsetzungen:
 from __future__ import annotations
 
 import logging
-import shutil
 import re
+import shutil
 import subprocess
 import time
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, Callable, Mapping, Protocol, Sequence
+from typing import TYPE_CHECKING, Protocol
 
-from .errors import MkarchisoMissing
+from .errors import BuildError, MkarchisoMissing
 from .limits import cpu_budget, describe_budget, host_cores
 
 if TYPE_CHECKING:
     from .preflight import PreflightReport
+    from .wsl_build import WslPaths
 from ..archiso.quoting import shell_quote
 
 log = logging.getLogger(__name__)
@@ -121,7 +123,7 @@ class ExecutionTarget(Protocol):
         paths: BuildPaths,
         *,
         iso_name: str,
-        on_progress: "Callable[[float, str], None] | None" = None,
+        on_progress: Callable[[float, str], None] | None = None,
     ) -> None:
         """Bringt den Profilbaum dorthin, wo mkarchiso ihn findet."""
 
@@ -142,7 +144,7 @@ class ExecutionTarget(Protocol):
         *,
         installed_mb: int = 0,
         bootmodes: Sequence[str] = (),
-    ) -> "PreflightReport":
+    ) -> PreflightReport:
         """Prueft dort, wo tatsaechlich gebaut wird.
 
         Bei einem Bau in WSL oder im Container waere eine Pruefung des
@@ -151,7 +153,7 @@ class ExecutionTarget(Protocol):
         """
 
     def cancel_run(
-        self, process: "subprocess.Popen[bytes] | None", *, grace_seconds: float
+        self, process: subprocess.Popen[bytes] | None, *, grace_seconds: float
     ) -> None:
         """Beendet den laufenden Bau -- dort, wo er wirklich laeuft.
 
@@ -159,6 +161,39 @@ class ExecutionTarget(Protocol):
         Signalweiterleiter: es zu beenden laesst mkarchiso in der Verteilung
         weiterlaufen. Bei einem Container traefe es nur den Client.
         """
+
+
+def _verlangt_eigenes_profil(pfad: Path) -> None:
+    """Bricht ab, wenn unter ``pfad`` etwas Fremdes liegt.
+
+    ``deliver_profile`` und ``discard`` loeschen rekursiv. Das Arbeits-
+    verzeichnis stammt aber aus einem Eingabefeld; der Validator ``writable_dir``
+    laesst jedes beschreibbare Verzeichnis zu, und die Vorabpruefung meldet ein
+    nicht leeres Verzeichnis nur als Hinweis. Ein versehentlich angegebener
+    Ordner mit eigenen Dateien war damit verloren.
+
+    Als "eigenes" gilt, was leer ist, den Marker der Senke traegt oder wie ein
+    archiso-Profil aussieht (profiledef.sh plus airootfs) -- dieselbe Regel wie
+    in ``DirectorySink._check_target``, nur hier vor dem Loeschen statt vor dem
+    Schreiben.
+    """
+    from ..archiso.errors import TargetNotEmptyError
+    from ..archiso.sinks import MARKER_NAME, looks_like_ours
+
+    if not pfad.is_dir():
+        return
+    try:
+        inhalt = list(pfad.iterdir())
+    except OSError:
+        return
+    if not inhalt:
+        return
+    if (pfad / MARKER_NAME).is_file() or looks_like_ours(pfad):
+        return
+    # 'work' legt mkarchiso selbst an; dort steht nichts vom Benutzer.
+    if pfad.name == "work" and (pfad / "x86_64").exists():
+        return
+    raise TargetNotEmptyError(str(pfad), len(inhalt))
 
 
 class LocalTarget:
@@ -238,6 +273,12 @@ class LocalTarget:
 
         profile_dir = Path(paths.profile)
         if profile_dir.exists():
+            # Nicht blind loeschen: work_dir kommt aus einem Eingabefeld, und
+            # der Validator laesst jedes beschreibbare Verzeichnis zu. Wer dort
+            # versehentlich einen Ordner mit eigenen Dateien angibt, verlor
+            # deren Inhalt -- die Vorabpruefung meldet ein nicht leeres
+            # Verzeichnis nur als Hinweis.
+            _verlangt_eigenes_profil(profile_dir)
             shutil.rmtree(profile_dir, ignore_errors=True)
         DirectorySink(profile_dir, iso_name=iso_name, force=True).write(
             tree,
@@ -261,6 +302,7 @@ class LocalTarget:
             if not pfad.exists():
                 continue
             try:
+                _verlangt_eigenes_profil(pfad)
                 shutil.rmtree(pfad)
                 log.info("Aufgeraeumt: %s", pfad)
             except OSError as exc:
@@ -285,8 +327,21 @@ class LocalTarget:
             return
         try:
             process.terminate()
-        except OSError:
-            return
+        except OSError as exc:
+            # Bei privilege_mode='pkexec' laeuft mkarchiso als root; ein
+            # unprivilegierter Prozess darf es nicht signalisieren und bekam
+            # hier EPERM -- kommentarlos verschluckt. Die Oberflaeche zeigte
+            # danach dauerhaft "Wird abgebrochen ...", der Abbrechen-Knopf war
+            # gesperrt und der Dialog liess sich nicht schliessen: der Benutzer
+            # war fuer die restliche Bauzeit eingesperrt.
+            log.warning("Der Bauprozess liess sich nicht beenden: %s", exc)
+            if self._kill_privileged(process):
+                return
+            raise BuildError(
+                "Der laufende Bau liess sich nicht beenden. Er wurde mit "
+                "erweiterten Rechten gestartet und laeuft weiter.",
+                f"terminate() scheiterte: {exc}",
+            ) from exc
         try:
             process.wait(timeout=grace_seconds)
             return
@@ -298,8 +353,40 @@ class LocalTarget:
         )
         try:
             process.kill()
-        except OSError:
-            pass
+        except OSError as exc:
+            log.warning("Hartes Beenden scheiterte: %s", exc)
+            self._kill_privileged(process, signal="KILL")
+
+    def _kill_privileged(self, process, *, signal: str = "TERM") -> bool:
+        """Ein als root laufender Bau laesst sich nur mit Rechten beenden.
+
+        Der Weg ueber ``pkexec kill`` loest eine zweite Polkit-Abfrage aus --
+        laestig, aber die Alternative ist ein Bau, der eine Stunde weiterlaeuft,
+        waehrend die Oberflaeche "Abgebrochen" meldet. Fehlt pkexec, wird
+        ehrlich False geliefert statt still zu schweigen.
+        """
+        pkexec = shutil.which("pkexec")
+        if pkexec is None:
+            return False
+        try:
+            ergebnis = subprocess.run(
+                [pkexec, "kill", f"-{signal}", "--", str(process.pid)],
+                capture_output=True,
+                timeout=60.0,
+                check=False,
+                shell=False,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            log.warning("pkexec kill fehlgeschlagen: %s", exc)
+            return False
+        if ergebnis.returncode != 0:
+            log.warning(
+                "pkexec kill meldet %s: %s",
+                ergebnis.returncode,
+                ergebnis.stderr.decode("utf-8", errors="replace").strip(),
+            )
+            return False
+        return True
 
 
 class WslExecutionTarget:
@@ -321,7 +408,7 @@ class WslExecutionTarget:
         self._cpu_note = ""
         # Erst prepare() weiss, wo drueben gearbeitet wird. Ein Abbruch kann
         # aber schon davor kommen.
-        self._paths = None
+        self._paths: WslPaths | None = None
 
     def resolve_executable(self) -> str:
         if not self.wsl.has_command("mkarchiso"):
@@ -513,6 +600,11 @@ class WslExecutionTarget:
         """
         from .wsl_build import transfer_profile
 
+        if self._paths is None:
+            raise ValueError(
+                "deliver_profile ohne vorheriges prepare(): die Verzeichnisse "
+                "in der Verteilung stehen noch nicht fest."
+            )
         if on_progress is not None:
             on_progress(0.3, "Archiv wird gepackt")
         transfer_profile(self.wsl, tree, self._paths, iso_name)
@@ -526,7 +618,7 @@ class WslExecutionTarget:
     ) -> None:
         from .wsl_build import cleanup
 
-        if getattr(self, "_paths", None) is None:
+        if self._paths is None:
             return
         cleanup(
             self.wsl,
@@ -878,6 +970,25 @@ class ContainerExecutionTarget:
     def deliver_profile(
         self, tree, paths: BuildPaths, *, iso_name: str, on_progress=None
     ) -> None:
+        """Profil ablegen -- und vorher das Abbild sicherstellen.
+
+        Die Vorabpruefung kuendigt an, das Abbild werde "beim ersten Mal
+        erzeugt". Gerufen hat ``ensure_image()`` bisher niemand: auf einem
+        Rechner ohne das lokale Abbild scheiterte der erste Bau sofort beim
+        ``run``, mit einer Meldung ueber ein fehlendes Abbild statt des
+        angekuendigten Baus.
+
+        Hier und nicht in ``prepare()``: der Abbildbau laedt einige hundert MB
+        und dauert Minuten. Er gehoert damit in den Schritt, der ohnehin
+        Fortschritt meldet.
+        """
+        if on_progress is not None:
+            on_progress(0.05, "Container-Abbild wird geprueft")
+        self.container.ensure_image(
+            on_line=lambda text: (
+                on_progress(0.5, text) if on_progress is not None else None
+            )
+        )
         # Woertlich der lokale Fall: das Verzeichnis ist ueber den Mount dasselbe.
         LocalTarget().deliver_profile(
             tree, paths, iso_name=iso_name, on_progress=on_progress
@@ -933,7 +1044,7 @@ class TargetOption:
 
     kind: str                     # "lokal" | "wsl" | "container"
     label: str                    # eine Zeile fuer den Benutzer
-    target: "ExecutionTarget | None" = None
+    target: ExecutionTarget | None = None
     problem: str = ""             # gefuellt, wenn dieser Weg hier nicht geht
     remedy: str = ""              # was der Benutzer dagegen tun kann
 
@@ -1053,10 +1164,14 @@ def _probe_container() -> TargetOption:
 
     if status.usable and status.engine:
         zusatz = "" if status.image_ready else " Das Abbild wird beim ersten Mal erzeugt."
+        ziel = ContainerTarget(status.engine)
+        # Damit die Vorabpruefung warnen kann, statt den Benutzer nach Minuten
+        # in einen Fehlschlag laufen zu lassen (devtmpfs im User-Namespace).
+        ziel.rootless = status.rootless
         return TargetOption(
             "container",
             f"In einem Container mit {status.engine}.{zusatz}",
-            target=ContainerExecutionTarget(ContainerTarget(status.engine)),
+            target=ContainerExecutionTarget(ziel),
         )
     return TargetOption(
         "container",

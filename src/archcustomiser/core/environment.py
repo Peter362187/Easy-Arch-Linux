@@ -213,11 +213,11 @@ def detect_environment() -> Environment:
             "funktioniert damit nicht."
         )
 
-    uid = os.getuid()
+    uid = os.getuid()  # type: ignore[attr-defined]
     try:
         import pwd
 
-        user = pwd.getpwuid(uid).pw_name
+        user = pwd.getpwuid(uid).pw_name  # type: ignore[attr-defined]
     except Exception:
         user = os.environ.get("USER", "")
 

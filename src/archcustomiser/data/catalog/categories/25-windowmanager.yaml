@@ -51,7 +51,9 @@ options:
       - foundation.wayland-base
       - foundation.fonts-base
       - foundation.polkit
-    requires_any: ["cap:display-manager"]
+    semantics:
+      profile_config.profile.main: "Desktop"
+      profile_config.profile.details: ["Hyprland"]
 
   - id: sway
     group: wayland
@@ -73,7 +75,9 @@ options:
       - foundation.fonts-base
       - foundation.portal-wlr
       - foundation.polkit
-    requires_any: ["cap:display-manager"]
+    semantics:
+      profile_config.profile.main: "Desktop"
+      profile_config.profile.details: ["Sway"]
 
   - id: i3
     group: xorg
@@ -92,4 +96,6 @@ options:
     implies:
       - foundation.xorg-base
       - foundation.fonts-base
-    requires_any: ["cap:display-manager"]
+    semantics:
+      profile_config.profile.main: "Desktop"
+      profile_config.profile.details: ["i3-wm"]

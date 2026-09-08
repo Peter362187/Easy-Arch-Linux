@@ -13,7 +13,8 @@ zaehlt, ist die Auskunft "es passiert etwas" und die Moeglichkeit, aufzugeben.
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, Signal, Slot
 from PySide6.QtWidgets import QDialog, QLabel, QProgressBar, QPushButton, QVBoxLayout, QWidget
@@ -75,6 +76,7 @@ class WaitDialog(QDialog):
         balken.setTextVisible(False)
         layout.addWidget(balken)
 
+        self._cancellable = cancellable
         if cancellable:
             abbrechen = QPushButton("Abbrechen")
             abbrechen.clicked.connect(self.reject)
@@ -86,6 +88,18 @@ class WaitDialog(QDialog):
         task.signals.done.connect(self._fertig)
         task.signals.failed.connect(self._gescheitert)
         QThreadPool.globalInstance().start(task)
+
+    def reject(self) -> None:
+        """Ohne Abbrechen-Knopf gibt es auch kein Escape.
+
+        Der Schliessknopf war entfernt, ``reject()`` aber nicht ueberschrieben:
+        Escape schloss den Dialog trotzdem. Bei der archiso-Installation lief
+        pacman danach unsichtbar weiter, waehrend die Oberflaeche nichts mehr
+        davon wusste.
+        """
+        if not self._cancellable:
+            return
+        super().reject()
 
     def _fertig(self, wert: object) -> None:
         self.result_value = wert

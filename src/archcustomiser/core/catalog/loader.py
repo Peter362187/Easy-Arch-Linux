@@ -12,11 +12,13 @@ anzufassen. Zusammengefuehrt wird ueber ``category.id`` + ``option.id``.
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 import yaml
 
+from .. import validation
 from ..paths import data_root, user_catalog_dir
 from . import predicate
 from .models import (
@@ -335,6 +337,7 @@ _FIELD_KEYS = frozenset(
         "visible_when",
         "enabled_when",
         "confirm_field",
+        "preview_role",
     }
 )
 
@@ -357,6 +360,12 @@ def _parse_fields(raw: Any, category_id: str, where: str) -> tuple[FieldSpec, ..
             raise CatalogError(
                 f"{spot}: widget {widget!r} unbekannt; erlaubt: {sorted(_VALID_WIDGETS)}"
             )
+        validator = _str(data, "validator", spot)
+        if validator and validator not in validation.registry_names():
+            raise CatalogError(
+                f"{spot}: validator {validator!r} unbekannt; erlaubt: "
+                f"{sorted(validation.registry_names())}"
+            )
         secret = _bool(data, "secret", spot, widget == "password")
         default = data.get("default")
         if secret and default not in (None, ""):
@@ -374,15 +383,27 @@ def _parse_fields(raw: Any, category_id: str, where: str) -> tuple[FieldSpec, ..
                 secret=secret,
                 choices=_parse_choices(data.get("choices"), spot),
                 choices_from=_str(data, "choices_from", spot),
-                validator=_str(data, "validator", spot),
+                validator=validator,
                 minimum=data.get("min"),
                 maximum=data.get("max"),
                 file_filter=_str(data, "file_filter", spot),
                 visible_when=_predicate(data, "visible_when", spot),
                 enabled_when=_predicate(data, "enabled_when", spot),
                 confirm_field=_str(data, "confirm_field", spot),
+                preview_role=_str(data, "preview_role", spot),
             )
         )
+
+    # ``confirm_field`` erst am Ende pruefen: es darf auf ein Feld zeigen, das
+    # weiter unten steht. Ein Tippfehler sperrte sonst den Weiter-Knopf
+    # dauerhaft -- verglichen wurde gegen ein Feld, das es nicht gibt.
+    bekannt = {spec.id for spec in result}
+    for spec in result:
+        if spec.confirm_field and spec.confirm_field not in bekannt:
+            raise CatalogError(
+                f"{where}: confirm_field {spec.confirm_field!r} von {spec.id!r} "
+                f"nennt kein Feld dieser Kategorie; vorhanden: {sorted(bekannt)}"
+            )
     return tuple(result)
 
 
@@ -487,6 +508,7 @@ _CATEGORY_KEYS = frozenset(
         "visible_when",
         "groups",
         "renamed_from",
+        "preview",
     }
 )
 
@@ -689,6 +711,7 @@ def _parse_category(raw: _RawCategory) -> Category:
         fields=fields,
         visible_when=_predicate(header, "visible_when", where),
         renamed_from=_str_tuple(header, "renamed_from", where),
+        preview=_str(header, "preview", where),
         source_files=tuple(raw.sources),
     )
 
@@ -793,19 +816,21 @@ def _check_references(
                     f"das nicht existiert"
                 )
 
-    for name, capability in capabilities.items():
-        if capability.default_provider and capability.default_provider not in known_refs:
+    # Der Name unterscheidet sich bewusst von der Schleife weiter oben, die
+    # ueber 'option.provides' und damit ueber Zeichenketten laeuft.
+    for name, spec in capabilities.items():
+        if spec.default_provider and spec.default_provider not in known_refs:
             raise CatalogError(
-                f"Capability {name!r}: default_provider {capability.default_provider!r} "
+                f"Capability {name!r}: default_provider {spec.default_provider!r} "
                 f"existiert nicht"
             )
-        if capability.arity is Arity.ONE and not capability.default_provider:
+        if spec.arity is Arity.ONE and not spec.default_provider:
             log.warning(
                 "Capability %r verlangt genau einen Anbieter, hat aber keinen "
                 "default_provider -- unerfuellbare Auswahlen sind moeglich",
                 name,
             )
-        for leaf in capability.required_if:
+        for leaf in spec.required_if:
             check_leaf(leaf, f"Capability {name}.required_if")
 
     unknown_categories = set()

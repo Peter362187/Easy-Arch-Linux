@@ -11,8 +11,8 @@ Jede Ergaenzung traegt eine Begruendung, die im Dry-Run erscheint. Wer
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Iterable, Sequence
 
 from ..config import BuildConfig
 from .settings import ArchisoSettings

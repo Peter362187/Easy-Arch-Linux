@@ -63,7 +63,7 @@ def controller(catalog, resolver):
 # ---------------------------------------------------------------------------
 
 
-def test_full_run_produces_an_iso(controller, tmp_path) -> None:
+def test_full_run_produces_an_iso(braucht_symlinks, controller, tmp_path) -> None:
     steps: list[Step] = []
     fractions: list[float] = []
 
@@ -82,7 +82,7 @@ def test_full_run_produces_an_iso(controller, tmp_path) -> None:
     assert fractions == sorted(fractions), "der Fortschritt ist zurueckgesprungen"
 
 
-def test_profile_is_written_before_the_build(controller, tmp_path) -> None:
+def test_profile_is_written_before_the_build(braucht_symlinks, controller, tmp_path) -> None:
     """mkarchiso bekommt ein echtes Verzeichnis, keinen Baum im Speicher."""
     seen: dict[str, Path] = {}
 
@@ -97,21 +97,21 @@ def test_profile_is_written_before_the_build(controller, tmp_path) -> None:
     assert seen["profile"].name == "profile"
 
 
-def test_work_directory_is_cleaned_up(controller, tmp_path) -> None:
+def test_work_directory_is_cleaned_up(braucht_symlinks, controller, tmp_path) -> None:
     work = tmp_path / "work"
     controller.run(work, tmp_path / "out", skip_preflight=True)
     assert not (work / "profile").exists()
     assert not (work / "work").exists()
 
 
-def test_work_directory_can_be_kept(controller, tmp_path) -> None:
+def test_work_directory_can_be_kept(braucht_symlinks, controller, tmp_path) -> None:
     """Zur Fehlersuche muss sich das Aufraeumen abschalten lassen."""
     work = tmp_path / "work"
     controller.run(work, tmp_path / "out", keep_work_dir=True, skip_preflight=True)
     assert (work / "profile" / "profiledef.sh").is_file()
 
 
-def test_build_log_is_written(controller, tmp_path) -> None:
+def test_build_log_is_written(braucht_symlinks, controller, tmp_path) -> None:
     outcome = controller.run(tmp_path / "work", tmp_path / "out", skip_preflight=True)
     assert outcome.log_path is not None and outcome.log_path.is_file()
     text = outcome.log_path.read_text(encoding="utf-8")
@@ -120,7 +120,7 @@ def test_build_log_is_written(controller, tmp_path) -> None:
     assert "Ausgabe von mkarchiso" in text
 
 
-def test_build_log_contains_no_password(controller, tmp_path) -> None:
+def test_build_log_contains_no_password(braucht_symlinks, controller, tmp_path) -> None:
     outcome = controller.run(tmp_path / "work", tmp_path / "out", skip_preflight=True)
     assert outcome.log_path is not None
     assert "geheim123" not in outcome.log_path.read_text(encoding="utf-8")
@@ -131,14 +131,14 @@ def test_build_log_contains_no_password(controller, tmp_path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_failure_is_reported_with_the_cause(controller, tmp_path, monkeypatch) -> None:
+def test_failure_is_reported_with_the_cause(braucht_symlinks, controller, tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("FAKE_FAIL_AT", "Creating SquashFS image")
     with pytest.raises(BuildFailed) as info:
         controller.run(tmp_path / "work", tmp_path / "out", skip_preflight=True)
     assert info.value.returncode != 0
 
 
-def test_log_is_written_even_when_the_build_fails(controller, tmp_path, monkeypatch) -> None:
+def test_log_is_written_even_when_the_build_fails(braucht_symlinks, controller, tmp_path, monkeypatch) -> None:
     """Gerade dann ist das Protokoll das Einzige, was noch hilft."""
     monkeypatch.setenv("FAKE_FAIL_AT", "Creating ISO image")
     from archcustomiser.core.logging_setup import build_log_dir
@@ -188,7 +188,7 @@ def test_invalid_configuration_never_reaches_mkarchiso(catalog, resolver, tmp_pa
 
 
 @pytest.mark.slow
-def test_cancel_during_the_build(controller, tmp_path, monkeypatch) -> None:
+def test_cancel_during_the_build(braucht_symlinks, controller, tmp_path, monkeypatch) -> None:
     import threading
     import time
 
@@ -245,10 +245,10 @@ def test_preflight_collects_every_finding(tmp_path) -> None:
 def _umgebung_ohne(*fehlende: str):
     """Eine Linux-Umgebung, in der bestimmte Werkzeuge fehlen."""
     from archcustomiser.core.environment import (
-        CONDITIONAL_TOOLS,
-        Environment,
         _OPTIONAL_TOOLS,
         _REQUIRED_TOOLS,
+        CONDITIONAL_TOOLS,
+        Environment,
         Tool,
     )
 

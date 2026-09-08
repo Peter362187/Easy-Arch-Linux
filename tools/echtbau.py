@@ -25,6 +25,7 @@ kein zugesagtes Merkmal des Programms, sondern Werkzeug fuer Pruefungen.
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 import traceback
@@ -104,8 +105,20 @@ def main(
         return 2
     schreibe(phase="Ziel gewaehlt", ziel=ziel.name)
 
+    # Frueher stand hier ein festes Passwort. Die damit gebaute ISO trug ein
+    # Benutzerkonto, dessen Kennwort im Repository nachzulesen war -- und die
+    # README nennt zwei so entstandene ISOs. Ohne Vorgabe wird das Konto
+    # gesperrt angelegt und laesst sich spaeter mit 'passwd' freischalten.
     secrets = SecretStore()
-    secrets.set("user.password", "archcustomiser")
+    kennwort = os.environ.get("ARCHCUSTOMISER_PASSWORD")
+    if kennwort:
+        secrets.set("user.password", kennwort)
+    else:
+        print(
+            "Hinweis: ohne ARCHCUSTOMISER_PASSWORD wird das Konto gesperrt "
+            "angelegt.",
+            file=sys.stderr,
+        )
 
     controller = BuildController(catalog, geladen.config, resolution, secrets, target=ziel)
 
@@ -132,7 +145,7 @@ def main(
         ergebnis = controller.run(
             arbeit, ausgabe, on_progress=anteil, on_line=zeile,
         )
-    except Exception as exc:                       # noqa: BLE001 -- alles festhalten
+    except Exception as exc:
         handle.flush()
         handle.close()
         schreibe(

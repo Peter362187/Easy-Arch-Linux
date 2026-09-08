@@ -16,7 +16,8 @@ Drei Schutzschichten:
 
 from __future__ import annotations
 
-from typing import Any, Callable, Final
+from collections.abc import Callable
+from typing import Any, Final
 
 _MASK: Final = "***"
 
@@ -103,10 +104,10 @@ class Secret:
     def __getstate__(self) -> Any:
         raise TypeError("Secret darf nicht serialisiert werden")
 
-    def __copy__(self) -> "Secret":
+    def __copy__(self) -> Secret:
         return Secret(bytes(self._buffer))
 
-    def __deepcopy__(self, _memo: dict[int, Any]) -> "Secret":
+    def __deepcopy__(self, _memo: dict[int, Any]) -> Secret:
         return Secret(bytes(self._buffer))
 
 

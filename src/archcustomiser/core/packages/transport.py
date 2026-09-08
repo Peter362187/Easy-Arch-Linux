@@ -11,10 +11,11 @@ import logging
 import socket
 import urllib.error
 import urllib.request
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from email.utils import formatdate, parsedate_to_datetime
-from datetime import datetime, timezone
-from typing import Mapping, Protocol
+from typing import Protocol
 
 from .errors import MirrorError, NetworkUnavailable
 
@@ -53,7 +54,7 @@ class HttpResponse:
         except (TypeError, ValueError):
             return None
         if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
+            parsed = parsed.replace(tzinfo=UTC)
         return parsed
 
     @property
@@ -102,6 +103,22 @@ class UrllibTransport:
                 body = response.read(MAX_RESPONSE_BYTES + 1)
                 if len(body) > MAX_RESPONSE_BYTES:
                     raise MirrorError(f"Antwort groesser als {MAX_RESPONSE_BYTES} Bytes: {url}")
+                # http.client liefert bei vorzeitigem Verbindungsende
+                # stillschweigend einen kuerzeren Rumpf. Ohne diesen Vergleich
+                # landete das Bruchstueck im Zwischenspeicher, der Parser warf
+                # danach RepositoryDataError -- und der Spiegelwechsel unterblieb,
+                # weil der Abruf ja "erfolgreich" war.
+                erwartet = response.headers.get("Content-Length")
+                if erwartet is not None:
+                    try:
+                        soll = int(erwartet)
+                    except ValueError:
+                        soll = -1
+                    if soll >= 0 and len(body) != soll:
+                        raise MirrorError(
+                            f"Unvollstaendige Antwort von {url}: "
+                            f"{len(body)} statt {soll} Bytes"
+                        )
                 return HttpResponse(
                     status=response.status,
                     headers=dict(response.headers.items()),
@@ -118,7 +135,7 @@ class UrllibTransport:
             if isinstance(reason, (socket.gaierror, socket.timeout, TimeoutError, ConnectionError)):
                 raise NetworkUnavailable(f"{url}: {reason}") from exc
             raise NetworkUnavailable(f"{url}: {reason}") from exc
-        except (TimeoutError, socket.timeout) as exc:
+        except TimeoutError as exc:
             raise NetworkUnavailable(f"{url}: Zeitueberschreitung") from exc
         except OSError as exc:
             raise NetworkUnavailable(f"{url}: {exc}") from exc

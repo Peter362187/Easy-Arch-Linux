@@ -26,8 +26,8 @@ from .airootfs import build_airootfs
 from .bootloader import build_bootloaders
 from .branding import build_branding, menu_title
 from .errors import ProfileError
-from .pacman_conf import render_pacman_conf
 from .packages import AddedPackage, render_packages, required_packages
+from .pacman_conf import render_pacman_conf
 from .profiledef import render_profiledef
 from .settings import ArchisoSettings, build_settings
 from .tree import ProfileTree

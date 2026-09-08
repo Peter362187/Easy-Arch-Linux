@@ -38,8 +38,8 @@ from __future__ import annotations
 import io
 import logging
 import tarfile
-from datetime import datetime, timezone
-from typing import Iterator
+from collections.abc import Iterator
+from datetime import UTC, datetime
 
 from .errors import RepositoryDataError
 from .models import PackageInfo, Provide
@@ -102,7 +102,7 @@ def _int_or_none(fields: dict[str, list[str]], key: str) -> int | None:
 def _date_or_none(fields: dict[str, list[str]], key: str) -> datetime | None:
     raw = _first(fields, key)
     try:
-        return datetime.fromtimestamp(int(raw), tz=timezone.utc)
+        return datetime.fromtimestamp(int(raw), tz=UTC)
     except (TypeError, ValueError, OSError, OverflowError):
         return None
 
@@ -188,6 +188,13 @@ def parse_syncdb(data: bytes, repo: str) -> tuple[PackageInfo, ...]:
     except RepositoryDataError:
         raise
     except (tarfile.TarError, EOFError, OSError) as exc:
+        raise RepositoryDataError(repo, f"{type(exc).__name__}: {exc}") from exc
+    except Exception as exc:
+        # gzip und lzma reichen bei beschaedigten Daten zlib.error bzw.
+        # LZMAError durch -- weder OSError noch TarError. Die Ausnahme
+        # durchlief bisher die gesamte Schicht bis in den Worker, ohne dass
+        # jemand den defekten Zwischenspeicher verwarf: jeder Start scheiterte
+        # danach erneut, bis die Frist ablief.
         raise RepositoryDataError(repo, f"{type(exc).__name__}: {exc}") from exc
 
     if not packages:

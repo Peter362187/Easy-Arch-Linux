@@ -11,8 +11,8 @@ Wichtig: gefiltert werden ``record.msg`` *und* ``record.args``, sonst rutscht
 from __future__ import annotations
 
 import logging
-import os
 import logging.handlers
+import os
 import re
 from collections import Counter
 from pathlib import Path
@@ -80,14 +80,36 @@ class SecretRedactionFilter(logging.Filter):
             return type(value)(self._scrub_any(item) for item in value)
         if isinstance(value, dict):
             return {key: self._scrub_any(item) for key, item in value.items()}
-        return value
+        # Alles andere wird erst im Formatter zu Text -- also hier schon. Ein
+        # Ausnahme- oder Pfadobjekt blieb sonst unmaskiert: aus
+        # ``log.warning("Fehler: %s", OSError(passwort))`` wurde eine
+        # Protokollzeile mit dem Klartext darin.
+        text = str(value)
+        maskiert = self._scrub(text)
+        return maskiert if maskiert != text else value
 
     def filter(self, record: logging.LogRecord) -> bool:
         if isinstance(record.msg, str):
             record.msg = self._scrub(record.msg)
         if record.args:
             record.args = self._scrub_any(record.args)  # type: ignore[assignment]
+        # Ein Traceback laeuft am Argumentweg voellig vorbei: er entsteht erst
+        # im Formatter aus ``exc_info``. Genau dort steht aber der Text jeder
+        # Ausnahme -- und ein ``ValueError("Passwort ... ungueltig")`` waere im
+        # Protokoll gelandet, obwohl jede gewoehnliche Zeile maskiert wird.
+        if record.exc_info and record.exc_info[1] is not None:
+            record.exc_text = self._scrub(self._formatiere(record))
+            record.exc_info = None
+        if record.stack_info:
+            record.stack_info = self._scrub(record.stack_info)
         return True
+
+    @staticmethod
+    def _formatiere(record: logging.LogRecord) -> str:
+        import traceback
+
+        art, wert, spur = record.exc_info      # type: ignore[misc]
+        return "".join(traceback.format_exception(art, wert, spur)).rstrip()
 
 
 _filter = SecretRedactionFilter()

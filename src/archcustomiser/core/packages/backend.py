@@ -15,9 +15,10 @@ Vorschau aus, statt eine plausible, aber erfundene Liste anzuzeigen.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Callable, Protocol, Sequence, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from .index import RepoIndex
 from .models import BackendCapabilities, CachePolicy, IndexMetadata, PackageInfo
@@ -57,7 +58,7 @@ class PackageConfig:
     connect_timeout: float = 20.0
     read_timeout: float = 120.0
 
-    def with_repos(self, repos: Sequence[str]) -> "PackageConfig":
+    def with_repos(self, repos: Sequence[str]) -> PackageConfig:
         return PackageConfig(
             arch=self.arch,
             repos=tuple(repos),

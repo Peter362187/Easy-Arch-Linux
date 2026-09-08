@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import difflib
 import logging
-from typing import Iterable, Sequence
+from collections.abc import Iterable, Sequence
 
 from .models import IndexMetadata, PackageInfo
 
@@ -27,7 +27,7 @@ MAX_SUGGESTIONS = 3
 class RepoIndex:
     """Unveraenderlicher Index ueber mehrere Repositories."""
 
-    __slots__ = ("meta", "_by_name", "_by_group", "_by_provide", "_names")
+    __slots__ = ("_by_group", "_by_name", "_by_provide", "_names", "meta")
 
     def __init__(self, packages: Iterable[PackageInfo], meta: IndexMetadata) -> None:
         self.meta = meta

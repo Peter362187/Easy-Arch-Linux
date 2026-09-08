@@ -38,7 +38,7 @@ options:
       - mesa
       - vulkan-icd-loader
     semantics:
-      profile_config.gfx_driver: "All open-source"   # archinstall-Enum, nicht frei waehlbar
+      profile_config.gfx_driver: "All open-source"
 
   - id: mesa-32
     order: 15

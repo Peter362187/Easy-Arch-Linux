@@ -21,8 +21,8 @@ from __future__ import annotations
 import json
 import logging
 import urllib.parse
-from datetime import datetime, timezone
-from typing import Iterable, Sequence
+from collections.abc import Iterable, Sequence
+from datetime import UTC, datetime
 
 from .errors import BackendUnavailable
 from .models import PackageInfo
@@ -39,7 +39,7 @@ REQUEST_TIMEOUT = 20.0
 class AurInfo:
     """Zusatzangaben, die es nur im AUR gibt."""
 
-    __slots__ = ("package", "out_of_date", "orphaned", "votes", "popularity")
+    __slots__ = ("orphaned", "out_of_date", "package", "popularity", "votes")
 
     def __init__(
         self,
@@ -129,7 +129,7 @@ class AurClient:
         stamp = entry.get("OutOfDate")
         if isinstance(stamp, int):
             try:
-                out_of_date = datetime.fromtimestamp(stamp, tz=timezone.utc)
+                out_of_date = datetime.fromtimestamp(stamp, tz=UTC)
             except (OSError, OverflowError, ValueError):
                 out_of_date = None
 

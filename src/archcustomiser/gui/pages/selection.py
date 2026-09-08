@@ -1,14 +1,18 @@
-"""Auswahlseite -- rendert eine Katalogkategorie mit Optionen.
+"""Auswahlseite -- rendert eine Katalogkategorie als Kartenraster.
 
-Diese eine Klasse erzeugt alle Auswahlschritte des Wizards: Desktop, Window
-Manager, Kernel, Netzwerk, Audio, Programme, Treiber und Dienste. Der
-Unterschied zwischen ihnen steht vollstaendig im YAML.
+Diese eine Klasse erzeugt alle Auswahlschritte: Desktop, Window Manager,
+Kernel, Netzwerk, Audio, Programme, Treiber, Dienste. Der Unterschied zwischen
+ihnen steht vollstaendig im YAML.
 
 Ein Detail, das leicht falsch gemacht wird: Bei Einfachauswahl gilt die
-Exklusivitaet fuer die **ganze Kategorie**, nicht je Gruppenkasten. Deshalb
-liegen alle Auswahlknoepfe in *einer* ``QButtonGroup``, obwohl sie optisch auf
-mehrere Kaesten verteilt sind -- sonst koennte man je Gruppe einen Desktop
-auswaehlen.
+Exklusivitaet fuer die **ganze Kategorie**, nicht je Gruppenkasten. Frueher
+sorgte dafuer eine gemeinsame ``QButtonGroup``. Die Karten zeichnen sich jetzt
+selbst und kennen keine Knoepfe mehr -- die Regel steht dort, wo sie ohnehin
+schon galt: im Store, der bei Einfachauswahl ``set_selection`` benutzt.
+
+Neu sind Filter neben der Suche: **Empfohlen** und **Ausgewaehlt**. Bei
+vierundzwanzig Programmen in sechs Gruppen ist "zeig mir, was ich schon habe"
+die haeufigste Frage.
 """
 
 from __future__ import annotations
@@ -17,9 +21,8 @@ import logging
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QButtonGroup,
     QGridLayout,
-    QGroupBox,
+    QLabel,
     QScrollArea,
     QVBoxLayout,
     QWidget,
@@ -27,211 +30,266 @@ from PySide6.QtWidgets import (
 
 from ...core.catalog import Category, Option, SelectionMode
 from ...core.config import SelectionSource
+from ..design import tokens
+from ..design.typo import CAPTION, SUBTITLE, schrift
 from ..store import SelectionStore
-from .. import theme
-from ..widgets.common import SearchField
-from ..widgets.option_widget import OptionWidget
-from .base import CatalogPageBase
+from ..widgets.cards import OptionCard
+from ..widgets.search import SearchField
+from .base import PageBase
 
 log = logging.getLogger(__name__)
 
 # Ab so vielen Eintraegen lohnt ein Suchfeld.
 SEARCH_THRESHOLD = 8
 
+FILTER_EMPFOHLEN = "empfohlen"
+FILTER_GEWAEHLT = "gewaehlt"
 
-class CatalogSelectionPage(CatalogPageBase):
+
+class _Gruppe(QWidget):
+    """Ein Ueberschriftsblock mit seinem Kartenraster."""
+
+    def __init__(self, titel: str, spalten: int, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        werte = tokens()
+        aussen = QVBoxLayout(self)
+        aussen.setContentsMargins(0, 0, 0, 0)
+        aussen.setSpacing(werte.space.sm)
+
+        self.kopf: QLabel | None = None
+        if titel:
+            self.kopf = QLabel(titel)
+            self.kopf.setFont(schrift(SUBTITLE, fett=True))
+            aussen.addWidget(self.kopf)
+
+        self.raster = QGridLayout()
+        self.raster.setSpacing(werte.space.sm)
+        self.raster.setContentsMargins(0, 0, 0, 0)
+        aussen.addLayout(self.raster)
+        self.spalten = max(1, spalten)
+        self._karten: list[OptionCard] = []
+
+    def hinzu(self, karte: OptionCard) -> None:
+        position = len(self._karten)
+        self.raster.addWidget(karte, position // self.spalten, position % self.spalten)
+        self._karten.append(karte)
+
+    def neu_anordnen(self) -> None:
+        """Sichtbare Karten luecklos setzen.
+
+        Ohne das hinterlaesst ein Filter Loecher im Raster: die Karten behalten
+        ihre Zellen, und zwischen zwei Treffern klafft eine leere Spalte.
+        """
+        sichtbar = [karte for karte in self._karten if not karte.isHidden()]
+        for karte in self._karten:
+            self.raster.removeWidget(karte)
+        for position, karte in enumerate(sichtbar):
+            self.raster.addWidget(
+                karte, position // self.spalten, position % self.spalten
+            )
+        self.setVisible(bool(sichtbar))
+
+
+class CatalogSelectionPage(PageBase):
+    """Eine Kategorie als Kartenraster mit Suche und Filtern."""
+
     def __init__(self, category: Category, store: SelectionStore) -> None:
         super().__init__(category, store)
-        self._widgets: dict[str, OptionWidget] = {}
-        self._button_group: QButtonGroup | None = None
-        self._build_ui()
+        self._karten: dict[str, OptionCard] = {}
+        self._gruppen: list[_Gruppe] = []
+        self.search: SearchField | None = None
+        self._aufbauen()
         self.add_help_link()
-        self.store.selectionChanged.connect(self._on_selection_changed)
+        self.store.selectionChanged.connect(lambda _c: self.sync_from_store())
         self.store.resolutionChanged.connect(self.sync_from_store)
 
     # -- Aufbau ---------------------------------------------------------------
-    def _build_ui(self) -> None:
-        container = QWidget()
-        outer = QVBoxLayout(container)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(theme.SPACE_MD)
-
-        exclusive = self.category.selection_mode is not SelectionMode.MULTI
-        if exclusive:
-            self._button_group = QButtonGroup(self)
-            self._button_group.setExclusive(True)
-
-        self._boxes: list[QGroupBox] = []
-        for group_id, options in self._grouped_options():
-            target = outer
-            box: QGroupBox | None = None
-            if group_id is not None:
-                box = QGroupBox(group_id.label)
-                outer.addWidget(box)
-                self._boxes.append(box)
-                target = QVBoxLayout(box)
-                target.setSpacing(theme.SPACE_SM)
-
-            grid = QGridLayout()
-            grid.setSpacing(theme.SPACE_SM)
-            columns = max(1, self.category.columns)
-            for position, option in enumerate(options):
-                widget = self._make_widget(option)
-                grid.addWidget(widget, position // columns, position % columns)
-            if isinstance(target, QVBoxLayout):
-                target.addLayout(grid)
-            else:
-                outer.addLayout(grid)
-
-        outer.addStretch(1)
+    def _aufbauen(self) -> None:
+        werte = tokens()
 
         # Ein Suchfeld erst, wenn es sich lohnt. Bei vier Kerneln waere es nur
-        # zusaetzliches Beiwerk; bei den vierundzwanzig Programmen in sechs
-        # Gruppen ist Scrollen und Lesen die einzige Alternative.
-        self.search: SearchField | None = None
+        # zusaetzliches Beiwerk.
         if len(self.category.options) >= SEARCH_THRESHOLD:
             self.search = SearchField(
                 f"{len(self.category.options)} Eintraege durchsuchen ..."
             )
-            self.search.textChanged.connect(self._apply_filter)
+            self.search.textChanged.connect(lambda _t: self._filtern())
+            self.search.filterChanged.connect(lambda _k, _a: self._filtern())
+            if any(option.recommended for option in self.category.options):
+                self.search.filter_hinzufuegen(FILTER_EMPFOHLEN, "Empfohlen")
+            self.search.filter_hinzufuegen(FILTER_GEWAEHLT, "Ausgewaehlt")
             self._root.addWidget(self.search)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        scroll.setWidget(container)
-        # Waagerecht darf nie gescrollt werden -- lange Beschreibungen brechen um.
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self._root.addWidget(scroll, 1)
+        behaelter = QWidget()
+        aussen = QVBoxLayout(behaelter)
+        aussen.setContentsMargins(0, 0, werte.space.sm, 0)
+        aussen.setSpacing(werte.space.lg)
 
-    def _apply_filter(self, needle: str) -> None:
+        for gruppe, optionen in self._gruppiert():
+            block = _Gruppe(gruppe.label if gruppe is not None else "", self.category.columns)
+            for option in optionen:
+                karte = OptionCard(option, self.category.selection_mode)
+                karte.toggled.connect(self._umgeschaltet)
+                self._karten[option.id] = karte
+                block.hinzu(karte)
+            aussen.addWidget(block)
+            self._gruppen.append(block)
+
+        aussen.addStretch(1)
+
+        rolle = QScrollArea()
+        rolle.setWidgetResizable(True)
+        rolle.setFrameShape(QScrollArea.Shape.NoFrame)
+        # Waagerecht nie scrollen -- lange Beschreibungen brechen um.
+        rolle.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        rolle.setWidget(behaelter)
+        self._root.addWidget(rolle, 1)
+
+        if not self.category.options:
+            leer = QLabel("Diese Kategorie enthaelt derzeit keine Optionen.")
+            leer.setFont(schrift(CAPTION))
+            leer.setProperty("rolle", "gedaempft")
+            self._root.addWidget(leer)
+
+    def _gruppiert(self):
+        """Optionen nach Gruppen, jeweils nach ``order`` sortiert."""
+        if not self.category.groups:
+            return [
+                (None, sorted(self.category.options, key=lambda o: (o.order, o.label)))
+            ]
+
+        ergebnis = []
+        bekannt = {gruppe.id for gruppe in self.category.groups}
+        for gruppe in sorted(self.category.groups, key=lambda g: g.order):
+            mitglieder = [
+                option for option in self.category.options if option.group == gruppe.id
+            ]
+            if mitglieder:
+                ergebnis.append(
+                    (gruppe, sorted(mitglieder, key=lambda o: (o.order, o.label)))
+                )
+        ohne = [
+            option
+            for option in self.category.options
+            if not option.group or option.group not in bekannt
+        ]
+        if ohne:
+            ergebnis.append((None, sorted(ohne, key=lambda o: (o.order, o.label))))
+        return ergebnis
+
+    # -- Filter ---------------------------------------------------------------
+    def _filtern(self) -> None:
         """Blendet aus, was nicht passt -- samt leer gewordener Gruppen."""
-        begriff = needle.strip().lower()
+        begriff = self.search.text().lower() if self.search is not None else ""
+        filter_ = self.search.aktive_filter() if self.search is not None else set()
+        gewaehlt = self.store.selected(self.category.id)
+        kontext = self.store.context()
+
         sichtbar = 0
-        for option_id, widget in self._widgets.items():
-            passt = not begriff or self._matches(widget.option, begriff)
-            widget.setProperty("filteredOut", not passt)
-            widget.setVisible(passt and self._allowed_by_catalog(option_id))
-            if widget.isVisibleTo(self):
+        for option_id, karte in self._karten.items():
+            option = karte.option
+            passt = (not begriff or _trifft(option, begriff)) and self._filter_passt(
+                option, option_id, filter_, gewaehlt
+            )
+            karte.setVisible(passt and self._vom_katalog_erlaubt(option, option_id, kontext))
+            if not karte.isHidden():
                 sichtbar += 1
 
-        for box in self._boxes:
-            # Ein Gruppenkasten ohne sichtbare Eintraege ist nur noch ein
-            # leerer Rahmen.
-            box.setVisible(
-                any(
-                    kind.isVisibleTo(box)
-                    for kind in box.findChildren(OptionWidget)
-                )
-            )
+        for gruppe in self._gruppen:
+            gruppe.neu_anordnen()
         if self.search is not None:
-            self.search.set_result_count(sichtbar, len(self._widgets))
+            self.search.setze_trefferzahl(sichtbar, len(self._karten))
 
-    @staticmethod
-    def _matches(option: Option, begriff: str) -> bool:
-        """Sucht in Beschriftung, Beschreibung UND Paketnamen.
+    def _filter_passt(
+        self, option: Option, option_id: str, filter_: set[str], gewaehlt: frozenset[str]
+    ) -> bool:
+        if FILTER_EMPFOHLEN in filter_ and not option.recommended:
+            return False
+        if FILTER_GEWAEHLT in filter_ and option_id not in gewaehlt:
+            return False
+        return True
 
-        Der Paketname ist oft das, was der Benutzer im Kopf hat -- wer "steam"
-        sucht, denkt nicht an "Spieleplattform".
-        """
-        felder = [option.label, option.description, option.id, *option.packages]
-        return any(begriff in str(feld).lower() for feld in felder if feld)
-
-    def _allowed_by_catalog(self, option_id: str) -> bool:
+    def _vom_katalog_erlaubt(self, option: Option, option_id: str, kontext) -> bool:
         """Ob die Option unabhaengig vom Filter ueberhaupt gezeigt wuerde."""
-        widget = self._widgets[option_id]
-        context = self.store.context()
         ref = f"{self.category.id}.{option_id}"
         if self.store.is_auto(ref) or self.store.is_selected(ref):
             return True
-        return widget.option.visible_when.evaluate(context)
+        return option.visible_when.evaluate(kontext)
 
-    def _grouped_options(self):
-        """Optionen nach Gruppen, jeweils nach ``order`` sortiert."""
-        if not self.category.groups:
-            return [(None, sorted(self.category.options, key=lambda o: (o.order, o.label)))]
-
-        result = []
-        for group in sorted(self.category.groups, key=lambda g: g.order):
-            members = [option for option in self.category.options if option.group == group.id]
-            if members:
-                result.append((group, sorted(members, key=lambda o: (o.order, o.label))))
-        ungrouped = [
-            option
-            for option in self.category.options
-            if not option.group or option.group not in {g.id for g in self.category.groups}
-        ]
-        if ungrouped:
-            result.append((None, sorted(ungrouped, key=lambda o: (o.order, o.label))))
-        return result
-
-    def _make_widget(self, option: Option) -> OptionWidget:
-        widget = OptionWidget(option, self.category.selection_mode)
-        widget.toggled.connect(self._on_option_toggled)
-        if self._button_group is not None:
-            self._button_group.addButton(widget.button)
-        self._widgets[option.id] = widget
-        return widget
+    def fokus_auf_suche(self) -> bool:
+        if self.search is None:
+            return False
+        self.search.edit.setFocus()
+        self.search.edit.selectAll()
+        return True
 
     # -- Store-Anbindung ------------------------------------------------------
-    def _on_option_toggled(self, option_id: str, checked: bool) -> None:
+    def _umgeschaltet(self, option_id: str, checked: bool) -> None:
         ref = f"{self.category.id}.{option_id}"
         self.store.toggle(ref, checked, source=SelectionSource.USER)
 
-    def _on_selection_changed(self, category_id: str) -> None:
-        # Auch fremde Kategorien koennen diese Seite betreffen: eine
-        # Desktop-Auswahl zieht Basiskomponenten mit und kann Optionen hier
-        # verfuegbar oder unverfuegbar machen.
-        self.sync_from_store()
-
     def sync_from_store(self) -> None:
-        selected = self.store.selected(self.category.id)
-        context = self.store.context()
+        gewaehlt = self.store.selected(self.category.id)
+        kontext = self.store.context()
 
-        for option_id, widget in self._widgets.items():
+        for option_id, karte in self._karten.items():
             ref = f"{self.category.id}.{option_id}"
-            widget.set_checked(option_id in selected)
+            karte.set_checked(option_id in gewaehlt)
 
             auto = self.store.is_auto(ref)
-            widget.set_auto(auto, self._auto_reason(ref) if auto else "")
+            karte.set_auto(auto, self._auto_grund(ref) if auto else "")
+            if auto:
+                continue
 
-            option = widget.option
-            if not auto:
-                visible = option.visible_when.evaluate(context)
-                enabled = visible and option.enabled_when.evaluate(context)
-                # Der Suchbegriff entscheidet mit: sonst holt ein Neuzeichnen
-                # aus dem Store gerade weggefilterte Karten zurueck.
-                widget.setVisible(
-                    (visible or option_id in selected) and self._matches_search(option)
-                )
-                widget.set_availability(
-                    enabled,
-                    "" if enabled else "Diese Option setzt eine andere Auswahl voraus.",
-                )
-        self._sync_group_visibility()
-        self.completeChanged.emit()
-
-    def _matches_search(self, option: Option) -> bool:
-        if self.search is None:
-            return True
-        begriff = self.search.text().lower()
-        return not begriff or self._matches(option, begriff)
-
-    def _sync_group_visibility(self) -> None:
-        for box in getattr(self, "_boxes", []):
-            box.setVisible(
-                any(kind.isVisibleTo(box) for kind in box.findChildren(OptionWidget))
+            option = karte.option
+            erlaubt = option.enabled_when.evaluate(kontext)
+            karte.set_availability(
+                erlaubt,
+                "" if erlaubt else "Diese Option setzt eine andere Auswahl voraus.",
             )
 
-    def _auto_reason(self, ref: str) -> str:
+        self._filtern()
+        self.completeChanged.emit()
+
+    def _auto_grund(self, ref: str) -> str:
         """Wer hat diese Option mitgezogen?"""
-        causes = [
-            other.label
-            for other_ref in sorted(self.store.resolution().effective_refs)
-            if (other := self.store.catalog.option(other_ref)) is not None
-            and ref in other.implies
-            and other_ref not in self.store.resolution().auto_refs
+        resolution = self.store.resolution()
+        ursachen = [
+            andere.label
+            for anderer_ref in sorted(resolution.effective_refs)
+            if (andere := self.store.catalog.option(anderer_ref)) is not None
+            and ref in andere.implies
+            and anderer_ref not in resolution.auto_refs
         ]
-        if causes:
-            return f"Automatisch ergaenzt, weil {', '.join(causes)} das benoetigt."
+        if ursachen:
+            return f"Automatisch ergaenzt, weil {', '.join(ursachen)} das benoetigt."
         return "Automatisch ergaenzt, weil eine andere Auswahl das benoetigt."
+
+    def is_complete(self) -> bool:
+        if self.category.selection_mode is SelectionMode.SINGLE and self.category.required:
+            if not self.store.selected(self.category.id):
+                return False
+        return super().is_complete()
+
+
+def _trifft(option: Option, begriff: str) -> bool:
+    """Sucht in Beschriftung, Beschreibung UND Paketnamen.
+
+    Der Paketname ist oft das, was der Benutzer im Kopf hat -- wer "steam"
+    sucht, denkt nicht an "Spieleplattform".
+    """
+    # ``option.packages`` sind ``PackageRef``-Objekte. Ungefiltert lieferte
+    # ``str()`` daraus "packageref(name='steam', when=..., reason='')" --
+    # die Suche traf den Namen nur zufaellig als Teilstring, dafuer aber
+    # auch jede Eingabe wie "when" oder "reason".
+    felder = (
+        option.label,
+        option.description,
+        option.id,
+        *(paket.name for paket in option.packages),
+        *option.package_groups,
+    )
+    return any(begriff in str(feld).lower() for feld in felder if feld)
+
+
+__all__ = ["CatalogSelectionPage"]

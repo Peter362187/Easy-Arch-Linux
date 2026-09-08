@@ -8,7 +8,7 @@ Bash-Syntax.
 
 from __future__ import annotations
 
-from typing import Mapping
+from collections.abc import Mapping
 
 from .quoting import bash_array, bash_assignment, bash_assoc
 from .settings import ArchisoSettings

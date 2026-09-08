@@ -23,7 +23,8 @@ import re
 import tempfile
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from dataclasses import replace as _replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -57,7 +58,7 @@ class CacheEntry:
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _iso(moment: datetime | None) -> str | None:
@@ -71,7 +72,7 @@ def _parse_iso(raw: Any) -> datetime | None:
         parsed = datetime.fromisoformat(raw)
     except ValueError:
         return None
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
 class CacheLock:
@@ -81,7 +82,7 @@ class CacheLock:
         self.path = path
         self._acquired = False
 
-    def __enter__(self) -> "CacheLock":
+    def __enter__(self) -> CacheLock:
         try:
             ensure_dir(self.path.parent)
         except OSError as exc:
@@ -256,16 +257,10 @@ class PackageCache:
             meta = {}
         meta.update({"schema_version": SCHEMA_VERSION, "fetched_at": _iso(fetched)})
         self._write_atomic(self.meta_path(entry.repo), json.dumps(meta, indent=2).encode("utf-8"))
-        return CacheEntry(
-            repo=entry.repo,
-            path=entry.path,
-            etag=entry.etag,
-            last_modified=entry.last_modified,
-            fetched_at=fetched,
-            sha256=entry.sha256,
-            size=entry.size,
-            package_count=entry.package_count,
-        )
+        # dataclasses.replace statt Neuaufbau: die frueher hier von Hand
+        # aufgezaehlten Felder liessen 'url' aus, und nach jeder
+        # 304-Antwort stand die Herkunft der Daten auf ''.
+        return _replace(entry, fetched_at=fetched)
 
     def _write_atomic(self, path: Path, data: bytes) -> None:
         try:

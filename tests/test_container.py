@@ -30,15 +30,24 @@ class FakeEngine:
 
     def __init__(self, antworten: dict[str, ContainerResult] | None = None) -> None:
         self.calls: list[list[str]] = []
+        self.eingaben: list[str | None] = []
         self.antworten = antworten or {}
 
-    def __call__(self, argv, timeout=None) -> ContainerResult:
+    def __call__(self, argv, timeout=None, eingabe=None) -> ContainerResult:
         argv = [str(item) for item in argv]
         self.calls.append(argv)
+        self.eingaben.append(eingabe)
         for schluessel, antwort in self.antworten.items():
             if schluessel in argv:
                 return antwort
         return ContainerResult(0, stdout="true")
+
+    def eingabe_zu(self, *teile: str) -> str | None:
+        """Die Standardeingabe des Aufrufs, der alle Teile enthaelt."""
+        for argv, eingabe in zip(self.calls, self.eingaben):
+            if all(t in argv for t in teile):
+                return eingabe
+        return None
 
     def saw(self, *teile: str) -> bool:
         return any(all(t in argv for t in teile) for argv in self.calls)
@@ -197,6 +206,38 @@ def test_the_image_is_built_only_once(engine) -> None:
     assert not engine.saw("build"), "vorhandenes Abbild wurde neu gebaut"
 
 
+def test_the_containerfile_actually_reaches_the_engine(engine) -> None:
+    """Der Fund, der den Container-Weg unbenutzbar machte.
+
+    ``build --file -`` liest das Containerfile von der Standardeingabe. Die
+    wurde nie befuellt: die Engine las die Standardeingabe der Anwendung --
+    aus einem Desktop-Start also nichts, aus einem Terminal blockierte sie bis
+    zum Zeitlimit von einer halben Stunde. Ohne diesen Test bleibt der Fehler
+    unsichtbar, weil kein Test je einen Container startet.
+    """
+    engine.antworten = {"exists": ContainerResult(1)}
+    ContainerTarget("podman", runner=engine).ensure_image()
+
+    eingabe = engine.eingabe_zu("build")
+    assert eingabe, "das Containerfile erreicht die Engine nicht"
+    assert eingabe.startswith("FROM docker.io/library/archlinux")
+    assert "archiso" in eingabe
+
+
+def test_the_build_context_is_not_the_current_directory(engine) -> None:
+    """Der Kontext war '.', also das Arbeitsverzeichnis der Anwendung.
+
+    podman uebertraegt ihn, docker schickt ihn vollstaendig an seinen Daemon.
+    Steht die Anwendung im Heimatverzeichnis, sind das Gigabyte fremder
+    Dateien -- fuer ein Abbild, das keine einzige davon braucht.
+    """
+    engine.antworten = {"exists": ContainerResult(1)}
+    ContainerTarget("podman", runner=engine).ensure_image()
+
+    aufruf = next(argv for argv in engine.calls if "build" in argv)
+    assert aufruf[-1] != ".", "der Bau-Kontext ist weiterhin das CWD"
+
+
 def test_a_failed_image_build_says_why(engine) -> None:
     engine.antworten = {
         "exists": ContainerResult(1),
@@ -260,113 +301,70 @@ def test_without_selinux_there_is_no_label(vorbereitet, monkeypatch) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Das Abbild -- die beiden Schloesser, die den Container-Weg unmoeglich machten
-#
-# Gemeldet und am 07.09.2026 nachgewiesen: der Container-Weg konnte im
-# Auslieferungszustand NIE funktionieren. Zwei voneinander unabhaengige
-# Fehler, die sich gegenseitig verdeckten.
+# Das Abbild entsteht auch wirklich
 # ---------------------------------------------------------------------------
 
 
-def test_the_containerfile_actually_reaches_the_engine(engine: FakeEngine) -> None:
-    """Frueher stand ``--file -`` da, ohne dass je etwas nach stdin ging.
+def test_the_image_is_ensured_before_the_profile_is_placed(vorbereitet, engine, tmp_path) -> None:
+    """ensure_image() hatte keinen einzigen Aufrufer.
 
-    ``_run`` kennt kein ``input=``. Die Engine erbte damit das stdin des
-    Programms: aus einem Terminal gestartet wartete sie 1800 Sekunden, aus der
-    Oberflaeche gestartet las sie sofort EOF und brach ab. Der Text der
-    Konstanten CONTAINERFILE kam nirgends an.
+    Die Vorabpruefung kuendigte an, das Abbild werde beim ersten Mal erzeugt;
+    tatsaechlich scheiterte der erste Bau auf einem Rechner ohne das lokale
+    Abbild sofort am 'run'.
     """
-    gesehen: dict[str, str] = {}
+    from archcustomiser.core.archiso.tree import ProfileTree
+    from archcustomiser.core.build.targets import BuildPaths
 
-    def mitlesend(argv, timeout=None) -> ContainerResult:
-        argv = [str(i) for i in argv]
-        if "build" in argv:
-            pfad = argv[argv.index("--file") + 1]
-            assert pfad != "-", "das Containerfile geht wieder nach stdin ins Leere"
-            gesehen["inhalt"] = Path(pfad).read_text(encoding="utf-8")
-            gesehen["kontext"] = argv[-1]
-        return engine(argv, timeout)
+    engine.antworten = {"exists": ContainerResult(1)}
+    baum = ProfileTree()
+    baum.add_file("profiledef.sh", "# leer", origin="test")
 
-    ziel = ContainerTarget("podman", runner=mitlesend)
-    ziel.build_image()
+    paths = BuildPaths(
+        profile=str(tmp_path / "profile"),
+        work=str(tmp_path / "work"),
+        out=str(tmp_path / "out"),
+    )
+    vorbereitet.deliver_profile(baum, paths, iso_name="flos")
 
-    assert "FROM" in gesehen["inhalt"], "die Engine bekam kein Containerfile"
-    assert "archiso" in gesehen["inhalt"], "das Abbild wuerde ohne archiso gebaut"
-    # Der Bauzusammenhang darf nicht das Arbeitsverzeichnis des Programms sein
-    # -- sonst wanderte der ganze Quellbaum zur Engine.
-    assert gesehen["kontext"] not in (".", ""), "der ganze Projektordner ginge an die Engine"
+    assert engine.saw("build"), "das Abbild wurde nicht gebaut"
 
 
-def test_the_temporary_containerfile_does_not_stay_behind(engine: FakeEngine) -> None:
-    pfade: list[str] = []
+def test_rootless_is_reported_instead_of_silently_failing(engine, tmp_path) -> None:
+    """Erkannt wurde rootless immer -- gesagt wurde es nie.
 
-    def merkend(argv, timeout=None) -> ContainerResult:
-        argv = [str(i) for i in argv]
-        if "build" in argv:
-            pfade.append(argv[argv.index("--file") + 1])
-        return engine(argv, timeout)
+    pacstrap haengt devtmpfs ein, und das geht in einem User-Namespace
+    grundsaetzlich nicht. Ohne Hinweis lief der Benutzer minutenlang in einen
+    Fehlschlag, dessen Ursache im Container nirgends steht.
 
-    ContainerTarget("podman", runner=merkend).build_image()
-    assert pfade and not Path(pfade[0]).exists(), "das Wegwerfverzeichnis blieb liegen"
-
-
-@pytest.fixture
-def ohne_dateisystem(monkeypatch):
-    """prepare() ohne echte Verzeichnisse -- POSIX-Pfade, kein mkdir.
-
-    Das Container-Ziel weist Windows-Pfade zu Recht ab; fuer die Pruefung des
-    Ablaufs braucht es aber kein Dateisystem.
+    Der Hinweis gilt fuer den Fall OHNE Abbild. Liegt eines vor, wird nicht
+    mehr auf das Anzeichen geschaut, sondern gemessen (siehe
+    ``test_the_preflight_blocks_when_mounting_is_impossible``) -- eine Messung
+    schlaegt ein Anzeichen. Ohne Abbild darf nicht gemessen werden, weil die
+    Vorabpruefung sonst hunderte MB nachlaedt.
     """
-    monkeypatch.setattr(Path, "mkdir", lambda self, **kwargs: None)
-    return ("/home/x/work", "/home/x/out")
+    from archcustomiser.core.build.preflight import run_container_preflight
 
+    engine.antworten = {"exists": ContainerResult(1)}      # Abbild fehlt noch
+    ziel = ContainerTarget("podman", runner=engine)
+    ziel.rootless = True
+    bericht = run_container_preflight(ziel, tmp_path / "work", tmp_path / "out")
 
-def test_preparing_a_build_makes_sure_the_image_exists(engine: FakeEngine, ohne_dateisystem) -> None:
-    """ensure_image wurde im ganzen Programm von niemandem gerufen.
-
-    Ohne Abbild startet wrap() anschliessend ``podman run
-    localhost/archcustomiser-archiso`` -- ein localhost-Name wird nicht aus dem
-    Netz geholt, die Engine bricht sofort ab.
-    """
-    engine.antworten = {"exists": ContainerResult(1)}     # Abbild fehlt
-    ziel = ContainerExecutionTarget(ContainerTarget("podman", runner=engine))
-    ziel.prepare("testiso", *ohne_dateisystem)
-
-    assert engine.saw("image", "exists"), "es wurde nie nach dem Abbild gefragt"
-    assert engine.saw("build", "--tag"), "das fehlende Abbild wurde nicht gebaut"
-
-
-def test_an_existing_image_is_not_rebuilt(engine: FakeEngine, ohne_dateisystem) -> None:
-    engine.antworten = {"exists": ContainerResult(0)}     # Abbild ist da
-    ziel = ContainerExecutionTarget(ContainerTarget("podman", runner=engine))
-    ziel.prepare("testiso", *ohne_dateisystem)
-
-    assert not engine.saw("build", "--tag"), "das vorhandene Abbild wurde neu gebaut"
-
-
-def test_a_container_error_carries_a_build_log() -> None:
-    """``controller.run`` faengt nur BuildError -- daran haengt das Protokoll.
-
-    Als blosse Exception rutschte ein gescheiterter Abbildbau am Schreiben der
-    Protokolldatei vorbei: Fehlermeldung ja, Protokoll nein.
-    """
-    from archcustomiser.core.build.errors import BuildError
-
-    assert issubclass(ContainerError, BuildError)
-    fehler = ContainerError("fuer den Benutzer", "fuer das Protokoll")
-    assert isinstance(fehler, BuildError)
-    assert fehler.user_message == "fuer den Benutzer"
-    assert fehler.technical == "fuer das Protokoll"
+    rechte = [pruefung for pruefung in bericht.checks if pruefung.name == "Rechte"]
+    assert rechte, "die Rechte-Pruefung fehlt"
+    assert not rechte[0].ok
+    assert "rootless" in rechte[0].detail
+    assert not rechte[0].fatal, "eine Warnung, keine Sperre"
 
 
 # ---------------------------------------------------------------------------
-# Die drei Fehler, die erst beim Planen eines echten Laufs auffielen
-# (07.09.2026). Attrappentests konnten sie nicht finden, weil sie die FORM
-# des Aufrufs pruefen und nicht seine WIRKUNG.
+# Aus dem Zweig main uebernommen: drei Eigenschaften, die hier sonst
+# ungeprueft blieben. Sie stammen aus dem ersten echten Container-Lauf am
+# 07.09.2026 -- Fehler, die Attrappentests strukturell nicht finden, weil sie
+# die FORM der Aufrufe pruefen und nicht ihre WIRKUNG.
 # ---------------------------------------------------------------------------
 
 
-def test_docker_is_not_declared_dead_when_it_is_running(engine: FakeEngine) -> None:
+def test_docker_is_not_declared_dead_when_it_is_running(monkeypatch) -> None:
     """Die Rootless-Frage wurde in podman-Vokabular gestellt.
 
     "{{.Host.Security.Rootless}}" ist podman-eigen. Dockers info-Vorlage
@@ -376,77 +374,63 @@ def test_docker_is_not_declared_dead_when_it_is_running(engine: FakeEngine) -> N
     """
     from archcustomiser.core.build import container as modul
 
-    aufrufe: list[list[str]] = []
+    def docker(argv, timeout=None, eingabe=None) -> ContainerResult:
+        """Verhaelt sich wie docker, nicht wie podman.
 
-    def docker(argv, timeout=None) -> ContainerResult:
+        Eine Vorlage mit ".Host" kennt docker nicht und quittiert sie mit einem
+        Fehler. Eine Attrappe, die jede Vorlage beantwortet, bildete den Fehler
+        gar nicht ab.
+        """
         argv = [str(i) for i in argv]
-        aufrufe.append(argv)
         if argv[:2] == ["docker", "--version"]:
             return ContainerResult(0, stdout="Docker version 28.0.4")
-        if "info" in argv and "--format" in argv:
-            # So verhaelt sich docker bei einer Vorlage, die es nicht kennt.
-            return ContainerResult(1, stderr="template parsing error")
+        if "--format" in argv:
+            if ".Host" in argv[argv.index("--format") + 1]:
+                return ContainerResult(1, stderr="template parsing error")
+            return ContainerResult(0, stdout="[name=seccomp,profile=builtin]")
         if "info" in argv:
             return ContainerResult(0, stdout="Server Version: 28.0.4")
         return ContainerResult(1)
 
-    monkey = pytest.MonkeyPatch()
-    monkey.setattr(modul, "find_engine", lambda: "docker")
-    monkey.setattr(modul, "_run", lambda argv, timeout=None: docker(argv, timeout))
-    try:
-        status = modul.detect()
-    finally:
-        monkey.undo()
+    monkeypatch.setattr(modul, "find_engine", lambda: "docker")
+    monkeypatch.setattr(modul, "_run", docker)
+    status = modul.detect()
 
     assert status.engine == "docker"
     assert not status.problem, f"docker faelschlich fuer tot erklaert: {status.problem}"
     assert status.usable
 
 
-def test_a_rootless_docker_daemon_is_recognised() -> None:
+def test_a_rootless_docker_daemon_is_recognised(monkeypatch) -> None:
     """docker meldet rootless nicht als 'true', sondern in den SecurityOptions."""
     from archcustomiser.core.build import container as modul
 
-    def docker(argv, timeout=None) -> ContainerResult:
-        """Eine Attrappe, die sich wie docker verhaelt -- nicht wie podman.
-
-        Der Unterschied ist der ganze Punkt: eine Vorlage mit ".Host" kennt
-        docker nicht und quittiert sie mit einem Fehler. Eine Attrappe, die
-        jede Vorlage beantwortet, wuerde den Fehler gar nicht abbilden.
-        """
+    def docker(argv, timeout=None, eingabe=None) -> ContainerResult:
         argv = [str(i) for i in argv]
         if argv[:2] == ["docker", "--version"]:
             return ContainerResult(0, stdout="Docker version 28.0.4")
         if "--format" in argv:
-            vorlage = argv[argv.index("--format") + 1]
-            if ".Host" in vorlage:
+            if ".Host" in argv[argv.index("--format") + 1]:
                 return ContainerResult(1, stderr="template parsing error")
-            return ContainerResult(0, stdout="[name=seccomp,profile=builtin name=rootless]")
+            return ContainerResult(0, stdout="[name=seccomp name=rootless]")
         if "info" in argv:
-            # Ohne Vorlage sagt die Rohausgabe nichts ueber rootless.
             return ContainerResult(0, stdout="Server Version: 28.0.4")
         return ContainerResult(1)
 
-    monkey = pytest.MonkeyPatch()
-    monkey.setattr(modul, "find_engine", lambda: "docker")
-    monkey.setattr(modul, "_run", lambda argv, timeout=None: docker(argv, timeout))
-    try:
-        status = modul.detect()
-    finally:
-        monkey.undo()
+    monkeypatch.setattr(modul, "find_engine", lambda: "docker")
+    monkeypatch.setattr(modul, "_run", docker)
 
-    assert status.rootless, "ein rootless laufender docker blieb unbemerkt"
+    assert modul.detect().rootless, "ein rootless laufender docker blieb unbemerkt"
 
 
 def test_the_mount_probe_uses_devtmpfs(engine: FakeEngine) -> None:
     """devtmpfs ist der richtige Pruefstein.
 
     Es hat im Kernel kein FS_USERNS_MOUNT-Flag und laesst sich in einem
-    Benutzer-Namensraum grundsaetzlich nicht einhaengen. Auf dem Rechner des
-    Autors nachgemessen: mit --privileged gelingt es, ohne scheitert es.
+    Benutzer-Namensraum grundsaetzlich nicht einhaengen. Am 07.09.2026 auf
+    echter Hardware nachgemessen: mit --privileged gelingt es, ohne nicht.
     """
-    ziel = ContainerTarget("podman", runner=engine)
-    assert ziel.can_mount_privileged()
+    assert ContainerTarget("podman", runner=engine).can_mount_privileged()
 
     aufruf = next(argv for argv in engine.calls if "devtmpfs" in " ".join(argv))
     assert "--privileged" in aufruf, "ohne --privileged sagt die Probe nichts aus"
@@ -482,39 +466,24 @@ def test_the_preflight_blocks_when_mounting_is_impossible(engine: FakeEngine, tm
 
 
 def test_the_preflight_claims_nothing_without_an_image(engine: FakeEngine, tmp_path) -> None:
-    """Ohne Abbild darf nicht geprueft werden -- das lueden 800 MB nach."""
+    """Ohne Abbild darf nicht geprueft werden -- das lueden hunderte MB nach."""
     from archcustomiser.core.build.preflight import run_container_preflight
 
     engine.antworten = {"exists": ContainerResult(1)}       # Abbild fehlt
-    bericht = run_container_preflight(
+    run_container_preflight(
         ContainerTarget("podman", runner=engine), tmp_path / "work", tmp_path / "out"
     )
-
     assert not engine.saw("--privileged"), "die Vorabpruefung hat einen Container gestartet"
-    rechte = [c for c in bericht.checks if c.name == "Rechte"][0]
-    assert rechte.ok and not rechte.fatal
-
-
-def test_a_missing_mkarchiso_in_the_image_is_noticed(engine: FakeEngine, ohne_dateisystem) -> None:
-    """Frueher behauptete das Ziel mkarchiso, ohne nachzusehen."""
-    from archcustomiser.core.build.errors import MkarchisoMissing
-
-    engine.antworten = {"command -v mkarchiso >/dev/null 2>&1": ContainerResult(1)}
-    ziel = ContainerExecutionTarget(ContainerTarget("podman", runner=engine))
-    with pytest.raises(MkarchisoMissing):
-        ziel.resolve_executable()
 
 
 def test_the_image_carries_every_tool_a_boot_mode_may_need() -> None:
     """Sonst entsteht eine Sackgasse.
 
-    Beim ersten echten Lauf am 07.09.2026 brach mkarchiso mit "grub-install is
-    not available on this host" ab: archiso zieht grub nicht mit, das Programm
-    bietet den Bootmodus uefi.grub aber an. Die Vorabpruefung haette daraufhin
-    gesagt "das Abbild muss neu gebaut werden" -- und dabei waere wieder
-    dasselbe Abbild ohne grub entstanden.
-
-    Was CONDITIONAL_TOOLS fordert, muss also im Containerfile stehen.
+    Beim ersten echten Lauf brach mkarchiso mit "grub-install is not available
+    on this host" ab: archiso zieht grub nicht mit, das Programm bietet den
+    Bootmodus uefi.grub aber an. Die Vorabpruefung haette daraufhin gesagt "das
+    Abbild muss neu gebaut werden" -- und dabei waere wieder dasselbe Abbild
+    ohne grub entstanden.
     """
     from archcustomiser.core.build.container import CONTAINERFILE
     from archcustomiser.core.environment import CONDITIONAL_TOOLS

@@ -1,0 +1,210 @@
+"""Bildschirmfotos der Oberflaeche -- offscreen, ohne dass ein Fenster aufgeht.
+
+Zwei Zwecke:
+
+* **Sehen, was Tests nicht sehen.** Ein Test prueft Endzustaende; ob eine Karte
+  zu eng steht oder eine Beschriftung abgeschnitten ist, sieht man nur im Bild.
+* **Doku.** Die Bilder in ``docs/screenshots`` entstehen hier und lassen sich
+  jederzeit neu erzeugen, statt von Hand abfotografiert zu werden.
+
+Aufruf::
+
+    python tools/gallery.py                 # nach docs/screenshots
+    python tools/gallery.py --out /tmp/bild # woandershin
+    python tools/gallery.py --nur dunkel    # nur eine Erscheinung
+
+Es wird nichts gebaut und nichts installiert -- nur gezeichnet.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+from pathlib import Path
+
+# Vor jedem Qt-Import: sonst sucht Qt einen Bildschirm, den es hier nicht gibt.
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+os.environ.setdefault("ARCHCUSTOMISER_MOTION", "off")
+
+WURZEL = Path(__file__).resolve().parent.parent
+if str(WURZEL / "src") not in sys.path:
+    sys.path.insert(0, str(WURZEL / "src"))
+
+BREITE = 1280
+HOEHE = 820
+
+
+# Wo die Systemschriften liegen. Das offscreen-Plugin von Qt bringt keine
+# Schriftdatenbank mit -- unter Windows meldet ``QFontDatabase.families()``
+# schlicht null Familien, und jedes Zeichen wird als leeres Kaestchen
+# gezeichnet. Fuer Bildschirmfotos ist das wertlos, also wird eine Schrift von
+# Hand nachgeladen.
+SCHRIFTKANDIDATEN = (
+    "C:/Windows/Fonts/segoeui.ttf",
+    "C:/Windows/Fonts/arial.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/TTF/DejaVuSans.ttf",
+    "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",
+    "/System/Library/Fonts/Supplemental/Arial.ttf",
+)
+MONOKANDIDATEN = (
+    "C:/Windows/Fonts/consola.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+    "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
+    "/System/Library/Fonts/Menlo.ttc",
+)
+
+
+def _schrift_sicherstellen(app) -> str:
+    """Sorgt dafuer, dass ueberhaupt eine Schrift da ist."""
+    from PySide6.QtGui import QFont, QFontDatabase
+
+    if QFontDatabase.families():
+        return app.font().family()
+
+    geladen = ""
+    for kandidat in SCHRIFTKANDIDATEN + MONOKANDIDATEN:
+        datei = Path(kandidat)
+        if not datei.is_file():
+            continue
+        kennung = QFontDatabase.addApplicationFont(str(datei))
+        if kennung < 0:
+            continue
+        familien = QFontDatabase.applicationFontFamilies(kennung)
+        if familien and not geladen:
+            geladen = familien[0]
+    if geladen:
+        app.setFont(QFont(geladen, 9))
+    return geladen or "(keine)"
+
+
+def _fenster(dunkel: bool, tmp: Path):
+    from PySide6.QtCore import QSettings
+
+    from archcustomiser.core.catalog import load_catalog
+    from archcustomiser.core.packages import PackageConfig, PackageService
+    from archcustomiser.core.packages.backend_remote import RemoteIndexBackend
+    from archcustomiser.core.profiles import ProfileService
+    from archcustomiser.gui.design import ThemeManager
+    from archcustomiser.gui.main_window import MainWindow
+    from archcustomiser.gui.packages_worker import PackageController
+    from archcustomiser.gui.settings import Settings
+    from archcustomiser.gui.store import SelectionStore
+
+    einstellungen = Settings(
+        QSettings(str(tmp / f"{'dunkel' if dunkel else 'hell'}.ini"), QSettings.Format.IniFormat)
+    )
+    einstellungen.theme_mode = "dark" if dunkel else "light"
+    theme = ThemeManager(einstellungen)
+    theme.apply()
+
+    katalog = load_catalog()
+    store = SelectionStore(katalog)
+
+    # Kein Netz: der Dienst bleibt ohne Index und meldet "nicht pruefbar".
+    leer = PackageConfig(repos=())
+    dienst = PackageService(leer, backend=RemoteIndexBackend(leer))
+
+    fenster = MainWindow(
+        katalog,
+        store,
+        PackageController(dienst),
+        ProfileService(katalog),
+        einstellungen,
+        theme,
+        None,
+    )
+    fenster.resize(BREITE, HOEHE)
+    fenster.show()
+    return fenster
+
+
+def _auswahl_setzen(store) -> None:
+    """Eine gefuellte Zusammenstellung -- ein leeres Programm zeigt nichts.
+
+    Muss **nach** dem Verlassen der Startseite geschehen: die wendet ihre Wahl
+    erst beim Weitergehen an, und "Von vorn beginnen" ist vorgehakt. Vorher
+    gesetzte Auswahlen waeren dabei wieder weg.
+    """
+    store.toggle("desktop.kde", True)
+    store.toggle("apps.firefox", True)
+    store.toggle("apps.git", True)
+    store.toggle("apps.steam", True)
+    store.set_extra_packages(["neovim", "htop"])
+    store.set_field("branding.distro_name", "FloArch")
+    store.set_field("branding.version", "1.0")
+
+
+def _aufnehmen(fenster, ziel: Path, name: str) -> Path:
+    datei = ziel / f"{name}.png"
+    fenster.grab().save(str(datei))
+    return datei
+
+
+def erzeuge(ziel: Path, erscheinungen: list[str]) -> list[Path]:
+    import tempfile
+
+    from PySide6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    app.setStyle("Fusion")
+    print(f"Schrift: {_schrift_sicherstellen(app)}")
+
+    ziel.mkdir(parents=True, exist_ok=True)
+    gemacht: list[Path] = []
+
+    with tempfile.TemporaryDirectory() as roh:
+        tmp = Path(roh)
+        for erscheinung in erscheinungen:
+            dunkel = erscheinung == "dunkel"
+            fenster = _fenster(dunkel, tmp)
+
+            # Einmal weitergehen: das wendet die Wahl der Startseite an und
+            # macht den Weg fuer eine eigene Zusammenstellung frei.
+            gemacht.append(_aufnehmen(fenster, ziel, f"{erscheinung}-welcome"))
+            fenster._weiter()
+            _auswahl_setzen(fenster.store)
+            app.processEvents()
+
+            for schritt in fenster.model.steps:
+                if not fenster.model.anklickbar(schritt):
+                    continue
+                if schritt.id == "welcome":
+                    continue          # steht schon im Kasten
+                fenster._gehe_zu(schritt.id, animiert=False)
+                app.processEvents()
+                gemacht.append(
+                    _aufnehmen(fenster, ziel, f"{erscheinung}-{schritt.id}")
+                )
+            fenster.hide()
+            fenster.setParent(None)
+            fenster.deleteLater()
+            app.processEvents()
+    return gemacht
+
+
+def main(argv: list[str] | None = None) -> int:
+    zerleger = argparse.ArgumentParser(description=__doc__)
+    zerleger.add_argument(
+        "--out",
+        default=str(WURZEL / "docs" / "screenshots"),
+        help="Zielverzeichnis (Vorgabe: docs/screenshots)",
+    )
+    zerleger.add_argument(
+        "--nur",
+        choices=["dunkel", "hell"],
+        help="nur eine Erscheinung aufnehmen",
+    )
+    argumente = zerleger.parse_args(argv)
+
+    erscheinungen = [argumente.nur] if argumente.nur else ["dunkel", "hell"]
+    dateien = erzeuge(Path(argumente.out), erscheinungen)
+    for datei in dateien:
+        print(datei)
+    print(f"{len(dateien)} Bilder in {argumente.out}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

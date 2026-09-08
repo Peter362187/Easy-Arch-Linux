@@ -1,12 +1,16 @@
 """Seite fuer frei eingegebene Zusatzpakete.
 
 Waehrend des Tippens wird gegen den geladenen Index geprueft. Jede Zeile
-bekommt sofort ein Ergebnis: gefunden, Gruppe, virtuelles Paket, Tippfehler
-mit Vorschlaegen -- oder "nicht pruefbar", wenn keine Paketdaten vorliegen.
+bekommt sofort ein Ergebnis: gefunden, Gruppe, virtuelles Paket, Tippfehler mit
+Vorschlaegen -- oder "nicht pruefbar", wenn keine Paketdaten vorliegen.
 
 Der letzte Fall ist der wichtige: solange kein vollstaendiger Index da ist,
 wird nichts als "existiert nicht" gemeldet. Andernfalls wuerde ein Netzausfall
 den Benutzer dazu bringen, einen korrekten Paketnamen zu loeschen.
+
+Solange die Paketdaten laden, steht statt einer leeren Tabelle ein
+Platzhaltermuster -- die Tabelle sah vorher aus wie ein Ergebnis mit null
+Treffern.
 """
 
 from __future__ import annotations
@@ -21,35 +25,25 @@ from PySide6.QtWidgets import (
     QLabel,
     QPlainTextEdit,
     QPushButton,
+    QStackedWidget,
     QTreeWidget,
     QTreeWidgetItem,
-    QVBoxLayout,
 )
 
 from ...core.catalog import Category
-from ...core.resolver import Issue
 from ...core.packages import EntryKind, parse_list
-from ...core.packages.validator import repositories_of
-from .. import theme
+from ...core.resolver import Issue
+from ..design import tokens
+from ..design.typo import CAPTION, schrift
 from ..packages_worker import PackageController
 from ..store import SelectionStore
 from ..widgets.common import brush
-from .base import CatalogPageBase
+from ..widgets.skeleton import SkeletonRows
+from .base import PageBase
 
 log = logging.getLogger(__name__)
 
 TYPING_DELAY_MS = 350
-
-def _colour(kind: EntryKind) -> str:
-    if kind in (EntryKind.PACKAGE,):
-        return theme.success()
-    if kind in (EntryKind.GROUP, EntryKind.PROVIDES_UNIQUE):
-        return theme.accent()
-    if kind in (EntryKind.PROVIDES_AMBIG, EntryKind.AUR):
-        return theme.warning()
-    if kind in (EntryKind.NOT_FOUND, EntryKind.INVALID_NAME):
-        return theme.danger()
-    return theme.muted()
 
 _LABELS = {
     EntryKind.PACKAGE: "Paket",
@@ -63,7 +57,21 @@ _LABELS = {
 }
 
 
-class FreePackagesPage(CatalogPageBase):
+def _farbe(kind: EntryKind) -> str:
+    p = tokens().palette
+    if kind is EntryKind.PACKAGE:
+        return p.success
+    if kind in (EntryKind.GROUP, EntryKind.PROVIDES_UNIQUE):
+        # ``accent_lesbar`` statt ``accent``: hier steht Text, keine Flaeche.
+        return p.accent_lesbar
+    if kind in (EntryKind.PROVIDES_AMBIG, EntryKind.AUR):
+        return p.warning
+    if kind in (EntryKind.NOT_FOUND, EntryKind.INVALID_NAME):
+        return p.danger
+    return p.text_muted
+
+
+class FreePackagesPage(PageBase):
     def __init__(
         self,
         category: Category,
@@ -76,25 +84,34 @@ class FreePackagesPage(CatalogPageBase):
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.setInterval(TYPING_DELAY_MS)
-        self._timer.timeout.connect(self._revalidate)
+        self._timer.timeout.connect(self._pruefen)
 
-        self._build_ui()
-        self.controller.ready.connect(lambda _ok: self._revalidate())
+        self._aufbauen()
+        self.controller.ready.connect(self._geladen)
+        # Einmal verbunden statt bei jedem Klick: sonst sammelten sich
+        # Mehrfachverbindungen an. Und an BEIDE Ausgaenge -- der Controller
+        # sendet bei einem Fehler nur 'failed', nie 'ready', und der Knopf
+        # blieb dauerhaft gesperrt.
+        self.controller.failed.connect(self._fehlgeschlagen)
         self.controller.statusChanged.connect(self.status.setText)
+        self.controller.aurReady.connect(self._aur_fertig)
+        self.controller.aurFailed.connect(self._aur_fehlgeschlagen)
         self.add_help_link()
 
-    def _build_ui(self) -> None:
-        hint = QLabel(
+    def _aufbauen(self) -> None:
+        werte = tokens()
+        hinweis = QLabel(
             "Ein Paket je Zeile oder durch Komma getrennt. Paketgruppen "
             "(z.B. <code>plasma</code>) sind ebenfalls erlaubt."
         )
-        hint.setWordWrap(True)
-        self._root.addWidget(hint)
+        hinweis.setWordWrap(True)
+        self._root.addWidget(hinweis)
 
         self.editor = QPlainTextEdit()
         self.editor.setPlaceholderText("neovim\nhtop\nwget")
         self.editor.setMinimumHeight(110)
         self.editor.setMaximumHeight(240)
+        self.editor.setAccessibleName("Zusaetzliche Pakete")
         self.editor.textChanged.connect(self._timer.start)
         self._root.addWidget(self.editor)
 
@@ -103,109 +120,169 @@ class FreePackagesPage(CatalogPageBase):
         self.results.setHeaderLabels(["Eingabe", "Art", "Ergebnis"])
         self.results.setRootIsDecorated(False)
         self.results.setAlternatingRowColors(True)
-        header = self.results.header()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        self._root.addWidget(self.results, 1)
+        kopf = self.results.header()
+        kopf.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        kopf.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        kopf.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
 
-        footer = QHBoxLayout()
+        self.skelett = SkeletonRows(6)
+        self._stapel = QStackedWidget()
+        self._stapel.addWidget(self.results)
+        self._stapel.addWidget(self.skelett)
+        self._root.addWidget(self._stapel, 1)
+
+        fuss = QHBoxLayout()
+        fuss.setSpacing(werte.space.sm)
         self.status = QLabel(self.controller.status_text())
-        self.status.setFont(theme.small_font())
-        self.status.setStyleSheet(f"color: {theme.muted()};")
-        footer.addWidget(self.status, 1)
+        self.status.setFont(schrift(CAPTION))
+        self.status.setProperty("rolle", "gedaempft")
+        self.status.setWordWrap(True)
+        fuss.addWidget(self.status, 1)
+
+        # Das AUR ist bewusst ein eigener Knopf und keine stille Erweiterung
+        # der Live-Pruefung: die Abfrage geht ins Netz, sie dauert, und sie
+        # verraet aur.archlinux.org, was jemand gerade tippt. Ein
+        # AUR-Paket landet ausserdem nicht in der ISO -- es muesste vorher
+        # lokal gebaut werden. Deshalb steht das Ergebnis als Hinweis da und
+        # macht die Zeile nicht gruen.
+        self.aur_button = QPushButton("Auch im AUR suchen")
+        self.aur_button.setProperty("variant", "ghost")
+        self.aur_button.setToolTip(
+            "Fragt aur.archlinux.org nach den Namen, die in den offiziellen "
+            "Repositorien fehlen. AUR-Pakete werden nicht mitgebaut."
+        )
+        self.aur_button.clicked.connect(self._aur_fragen)
+        fuss.addWidget(self.aur_button)
 
         self.refresh_button = QPushButton("Paketdaten aktualisieren")
-        self.refresh_button.clicked.connect(self._refresh)
-        footer.addWidget(self.refresh_button)
-        self._root.addLayout(footer)
+        self.refresh_button.setProperty("variant", "ghost")
+        self.refresh_button.clicked.connect(self._aktualisieren)
+        fuss.addWidget(self.refresh_button)
+        self._root.addLayout(fuss)
 
     # -- Ereignisse -----------------------------------------------------------
-    def _refresh(self) -> None:
+    def _aktualisieren(self) -> None:
         from ...core.packages import RefreshPolicy
 
+        if self.controller.loading:
+            # start() kehrt sonst wirkungslos zurueck, der Knopf wuerde aber
+            # trotzdem gesperrt und wieder freigegeben -- ohne dass ein
+            # erzwungenes Neuladen stattgefunden haette.
+            return
         self.refresh_button.setEnabled(False)
-        self.controller.ready.connect(self._on_refreshed)
+        self._stapel.setCurrentWidget(self.skelett)
         self.controller.start(RefreshPolicy.FORCE)
 
-    def _on_refreshed(self, _ok: bool) -> None:
+    def _geladen(self, _ok: bool) -> None:
         self.refresh_button.setEnabled(True)
-        try:
-            self.controller.ready.disconnect(self._on_refreshed)
-        except (RuntimeError, TypeError):
-            # Schon getrennt oder nie verbunden -- kein Grund zur Sorge, aber
-            # auch kein Grund, gar nichts zu sagen.
-            log.debug("Signal war bereits getrennt", exc_info=True)
+        self._stapel.setCurrentWidget(self.results)
+        self._pruefen()
+
+    def _fehlgeschlagen(self, meldung: str) -> None:
+        """Auch ein Fehlschlag gibt den Knopf wieder frei."""
+        log.warning("Paketdaten nicht ladbar: %s", meldung)
+        self.refresh_button.setEnabled(True)
+        self._stapel.setCurrentWidget(self.results)
+
+    def _aur_fragen(self) -> None:
+        namen = parse_list(self.editor.toPlainText())
+        if not namen:
+            return
+        self.aur_button.setEnabled(False)
+        self.aur_button.setText("Wird im AUR gesucht ...")
+        self.controller.pruefe_aur(
+            namen, provider_choices=self.store.config.provider_choices
+        )
+
+    def _aur_fertig(self, report: object) -> None:
+        self._aur_zuruecksetzen()
+        if report is not None:
+            self._zeige_report(report)
+
+    def _aur_fehlgeschlagen(self, meldung: str) -> None:
+        self._aur_zuruecksetzen()
+        self.status.setText(f"AUR nicht erreichbar: {meldung}")
+
+    def _aur_zuruecksetzen(self) -> None:
+        self.aur_button.setEnabled(True)
+        self.aur_button.setText("Auch im AUR suchen")
 
     def sync_from_store(self) -> None:
-        current = "\n".join(self.store.extra_packages())
-        if current != self.editor.toPlainText():
-            blocked = self.editor.blockSignals(True)
+        aktuell = "\n".join(self.store.extra_packages())
+        if aktuell != self.editor.toPlainText():
+            blockiert = self.editor.blockSignals(True)
             try:
-                self.editor.setPlainText(current)
+                self.editor.setPlainText(aktuell)
             finally:
-                self.editor.blockSignals(blocked)
+                self.editor.blockSignals(blockiert)
         self.status.setText(self.controller.status_text())
-        self._revalidate()
+        if self.controller.loading:
+            self._stapel.setCurrentWidget(self.skelett)
+        self._pruefen()
 
-    def _revalidate(self) -> None:
-        names = parse_list(self.editor.toPlainText())
-        self.store.set_extra_packages(names)
+    def _pruefen(self) -> None:
+        namen = parse_list(self.editor.toPlainText())
+        self.store.set_extra_packages(namen)
 
         self.results.clear()
         self._blocking = 0
-        if not names:
+        if not namen:
+            self.set_local_issues(())
             self.completeChanged.emit()
             return
 
         report = self.controller.validate(
-            names, provider_choices=self.store.config.provider_choices
+            namen, provider_choices=self.store.config.provider_choices
         )
-        for entry in report.entries:
+        self._zeige_report(report)
+
+    def _zeige_report(self, report) -> None:
+        """Zeichnet die Ergebnistabelle -- fuer die Live-Pruefung und fuers AUR."""
+        self.results.clear()
+        self._blocking = 0
+        # Ein frei eingegebenes multilib-Paket braucht das Repository in der
+        # erzeugten pacman.conf -- der Katalog weiss davon nichts.
+        self.store.set_package_report(report)
+        for eintrag in report.entries:
             # Bei mehrdeutigen Eintraegen steht in der Ergebnisspalte eine
             # Auswahlbox. Zusaetzlicher Text wuerde darunter durchscheinen.
-            ambiguous = entry.kind is EntryKind.PROVIDES_AMBIG
-            item = QTreeWidgetItem(
+            mehrdeutig = eintrag.kind is EntryKind.PROVIDES_AMBIG
+            zeile = QTreeWidgetItem(
                 [
-                    entry.query,
-                    _LABELS.get(entry.kind, "?"),
-                    "" if ambiguous else entry.message,
+                    eintrag.query,
+                    _LABELS.get(eintrag.kind, "?"),
+                    "" if mehrdeutig else eintrag.message,
                 ]
             )
-            farbe = brush(_colour(entry.kind))
-            item.setForeground(1, farbe)
-            item.setForeground(2, farbe)
-            item.setToolTip(1, entry.message)
-            item.setToolTip(2, "\n".join(entry.notes) if entry.notes else entry.message)
-            for column in range(3):
-                font = item.font(column)
-                font.setBold(entry.kind.is_blocking)
-                item.setFont(column, font)
-            item.setData(1, Qt.ItemDataRole.UserRole, entry.kind.name)
-            self.results.addTopLevelItem(item)
+            farbe = brush(_farbe(eintrag.kind))
+            zeile.setForeground(1, farbe)
+            zeile.setForeground(2, farbe)
+            zeile.setToolTip(1, eintrag.message)
+            zeile.setToolTip(
+                2, "\n".join(eintrag.notes) if eintrag.notes else eintrag.message
+            )
+            for spalte in range(3):
+                font = zeile.font(spalte)
+                font.setBold(eintrag.kind.is_blocking)
+                zeile.setFont(spalte, font)
+            zeile.setData(1, Qt.ItemDataRole.UserRole, eintrag.kind.name)
+            self.results.addTopLevelItem(zeile)
 
-            if ambiguous:
-                self._add_provider_picker(item, entry)
+            if mehrdeutig:
+                self._anbieterwahl(zeile, eintrag)
 
-            if entry.kind.is_blocking:
+            if eintrag.kind.is_blocking:
                 self._blocking += 1
 
-        # Welche Repositories die eingetippten Pakete brauchen. Der Paketindex
-        # laedt multilib mit, ein "steam" gilt hier also als gefunden -- die
-        # erzeugte pacman.conf kannte das Repository aber nicht, und der Bau
-        # scheiterte erst Minuten spaeter in pacstrap.
-        self.store.set_extra_repositories(repositories_of(report))
-
-        self._publish_package_errors(report)
+        self._paketfehler_melden(report)
         self.completeChanged.emit()
 
-    def _publish_package_errors(self, report) -> None:
+    def _paketfehler_melden(self, report) -> None:
         """Blockierende Paketfehler nach oben geben.
 
-        Vorher zaehlte ein blockierender Eintrag nur ``self._blocking`` hoch und
-        faerbte eine Baumzeile. Der Weiter-Knopf war grau, die Hinweisleiste
-        oben blieb leer -- und wer nicht genau hinsah, suchte den Grund
-        vergebens.
+        Vorher faerbte ein blockierender Eintrag nur eine Baumzeile. Der
+        Weiter-Knopf war grau, die Hinweisleiste oben blieb leer -- und wer
+        nicht genau hinsah, suchte den Grund vergebens.
         """
         schlimme = [e for e in report.entries if e.kind.is_blocking]
         if not schlimme:
@@ -228,28 +305,32 @@ class FreePackagesPage(CatalogPageBase):
             )
         )
 
-    def _add_provider_picker(self, item: QTreeWidgetItem, entry) -> None:
+    def _anbieterwahl(self, zeile: QTreeWidgetItem, eintrag) -> None:
         """Bei mehreren Anbietern muss vorab entschieden werden.
 
         pacman wuerde interaktiv fragen; mkarchiso laeuft ohne Rueckfrage und
         wuerde an dieser Stelle abbrechen.
         """
         combo = QComboBox()
-        combo.setToolTip(entry.message)
-        combo.addItem(f"{len(entry.members)} Anbieter -- bitte einen waehlen", "")
-        for provider in entry.members:
-            combo.addItem(provider, provider)
+        combo.setToolTip(eintrag.message)
+        combo.addItem(f"{len(eintrag.members)} Anbieter -- bitte einen waehlen", "")
+        for anbieter in eintrag.members:
+            combo.addItem(anbieter, anbieter)
         combo.currentIndexChanged.connect(
-            lambda _index, c=combo, virtual=entry.normalized: self._choose_provider(virtual, c)
+            lambda _i, c=combo, virtuell=eintrag.normalized: self._anbieter_setzen(
+                virtuell, c
+            )
         )
-        self.results.setItemWidget(item, 2, combo)
+        self.results.setItemWidget(zeile, 2, combo)
 
-    def _choose_provider(self, virtual: str, combo: QComboBox) -> None:
-        provider = combo.currentData()
-        if provider:
-            self.store.set_provider_choice(virtual, str(provider))
-            self._revalidate()
+    def _anbieter_setzen(self, virtuell: str, combo: QComboBox) -> None:
+        anbieter = combo.currentData()
+        if anbieter:
+            self.store.set_provider_choice(virtuell, str(anbieter))
+            self._pruefen()
 
-    def isComplete(self) -> bool:
-        return self._blocking == 0 and super().isComplete()
+    def is_complete(self) -> bool:
+        return self._blocking == 0 and super().is_complete()
 
+
+__all__ = ["FreePackagesPage"]

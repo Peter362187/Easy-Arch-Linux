@@ -1,14 +1,14 @@
 # Prueft den Container-Bauweg auf einem echten Ubuntu.
 #
-# Warum es diesen Ablauf gibt: der Container ist der einzige der drei Bauwege,
-# der nicht auf dem Rechner des Autors laufen kann -- dort ist Windows mit
-# einer WSL-Arch-Verteilung. Bis zum 07.09.2026 war er deshalb "durch Tests
-# belegt, aber nie auf einem echten System gelaufen", und genau darin
-# versteckten sich vier Fehler, die Attrappentests nicht finden konnten.
+# Warum es diesen Ablauf zusaetzlich zu ci.yml gibt: dort laufen die Tests --
+# hier laeuft ein echter Container. Das ist ein Unterschied, der sich am
+# 07.09.2026 als teuer erwiesen hat. Die Testsammlung deckt die *Form* der
+# Aufrufe lueckenlos ab und ihre *Wirkung* ueberhaupt nicht; vier Fehler
+# ueberlebten deshalb jahrelang, darunter zwei, die den Weg vollstaendig
+# unmoeglich machten.
 #
-# Bewusst NUR auf Knopfdruck (workflow_dispatch). Nichts laeuft automatisch:
-# ein voller ISO-Bau dauert eine halbe Stunde, und niemand soll dafuer
-# bezahlen, nur weil ein Komma verschoben wurde.
+# Bewusst NUR auf Knopfdruck. Ein Abbildbau laedt hunderte MB, ein ISO-Bau
+# dauert eine halbe Stunde -- das gehoert nicht an jeden Push.
 #
 #   Actions -> "Container-Bauweg pruefen" -> "Run workflow"
 
@@ -24,7 +24,6 @@ on:
         options:
           - pruefung        # Abbild, Einhaengungen, pacstrap -- rund 6 Minuten
           - iso             # zusaetzlich eine vollstaendige ISO -- rund 30 Minuten
-          - nur-tests       # nur die Testsammlung auf echtem Linux
       engine:
         description: "Welche Container-Engine?"
         type: choice
@@ -37,37 +36,9 @@ permissions:
   contents: read
 
 jobs:
-  # -------------------------------------------------------------------------
-  # Die Testsammlung auf echtem Linux. Zwei Tests werden unter Windows
-  # uebersprungen und sind dort noch nie gelaufen.
-  # -------------------------------------------------------------------------
-  tests:
-    name: Tests auf Linux
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Abhaengigkeiten
-        # Bewusst ohne PySide6: das Paket ist gross, braucht Qt-Systembibliotheken,
-        # und die Oberflaechentests ueberspringen sich selbst, wenn es fehlt
-        # (pytest.importorskip in tests/test_gui.py). Geprueft wird hier der Kern.
-        run: python -m pip install --upgrade pip PyYAML Jinja2 pytest
-
-      - name: Testsammlung
-        run: PYTHONPATH=src python -m pytest -q
-
-  # -------------------------------------------------------------------------
-  # Sprossen 0 bis 2: Abbild bauen, Einhaengungen pruefen, pacstrap.
-  # Ueber den Code des Programms, nicht ueber nachgebaute Befehle.
-  # -------------------------------------------------------------------------
   pruefung:
     name: Container-Weg (${{ inputs.engine }})
     runs-on: ubuntu-24.04
-    if: inputs.umfang != 'nur-tests'
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -77,45 +48,38 @@ jobs:
           python-version: "3.12"
 
       - name: Abhaengigkeiten
+        # Ohne PySide6: geprueft wird der Kern, und der ist Qt-frei.
         run: python -m pip install --upgrade pip PyYAML Jinja2
 
       - name: Was dieser Runner mitbringt
         run: |
           df -h /
-          echo "---"
           docker --version || echo "kein docker"
           podman --version || echo "kein podman"
           id
 
       - name: Was das Programm ueber beide Engines sagt
-        # Nie fehlschlagend: das ist eine Auskunft, keine Pruefung. Interessant
-        # ist vor allem, dass podman hier rootless laeuft und docker nicht --
-        # genau die Unterscheidung, die bis zum 07.09.2026 gar nicht ankam,
-        # weil die Rootless-Frage in podman-Vokabular gestellt wurde.
+        # Eine Auskunft, keine Pruefung -- deshalb nie fehlschlagend.
+        # Aufschlussreich ist der Unterschied: docker laeuft auf dem Runner
+        # rootful, podman rootless. Genau diese Unterscheidung kam bis zum
+        # 07.09.2026 gar nicht an, weil die Frage in podman-Vokabular gestellt
+        # wurde und docker sie mit einem Fehler quittierte.
         continue-on-error: true
         run: |
           for e in docker podman; do
             echo "=== $e ==="
             PYTHONPATH=src python -c "
-          from archcustomiser.core.build.container import ContainerTarget, detect
           import archcustomiser.core.build.container as c
           c.find_engine = lambda: '$e'
-          s = detect()
-          print(' engine  ', s.engine)
-          print(' version ', s.version)
-          print(' rootless', s.rootless)
-          print(' usable  ', s.usable)
-          print(' problem ', s.problem or '(keines)')
+          s = c.detect()
+          for feld in ('engine', 'version', 'rootless', 'usable', 'problem'):
+              print(f'  {feld:9}', getattr(s, feld))
           "
           done
 
-      - name: Sprossen 0 bis 2
+      - name: Sprossen 0 bis 2 -- Abbild, Einhaengungen, pacstrap
         run: PYTHONPATH=src python tools/containerprobe.py --engine ${{ inputs.engine }}
 
-  # -------------------------------------------------------------------------
-  # Sprosse 4: eine vollstaendige ISO ueber dieselbe Schnittstelle, die auch
-  # der Knopf "ISO erstellen" benutzt.
-  # -------------------------------------------------------------------------
   iso:
     name: Vollstaendige ISO im Container
     runs-on: ubuntu-24.04
@@ -134,30 +98,32 @@ jobs:
 
       - name: Platz schaffen
         # Die Vorabpruefung verlangt 8 GB (BASE_WORK_GB); der Runner bringt
-        # rund 22 GB mit, aber das Abbild und der pacman-Zwischenspeicher
-        # kommen dazu. Die vorinstallierten SDKs braucht hier niemand.
+        # rund 22 GB mit, aber Abbild und pacman-Zwischenspeicher kommen dazu.
+        # Die vorinstallierten SDKs braucht hier niemand.
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           df -h /
 
       - name: ISO bauen
+        # Ueber die offizielle Kommandozeile, nicht ueber ein Hilfsskript:
+        # geprueft werden soll der Weg, den auch ein Benutzer nimmt.
         run: |
           mkdir -p "$HOME/acbau/work" "$HOME/acbau/out"
-          PYTHONPATH=src python tools/echtbau.py \
-            src/archcustomiser/profiles/minimal.yaml "$HOME/fortschritt.json" \
-            --ziel container --engine ${{ inputs.engine }} \
-            --arbeit "$HOME/acbau/work" --ausgabe "$HOME/acbau/out"
+          PYTHONPATH=src python -m archcustomiser \
+            --build src/archcustomiser/profiles/minimal.yaml \
+            --target container \
+            --work-dir "$HOME/acbau/work" --out-dir "$HOME/acbau/out"
 
       - name: Was dabei herauskam
         if: always()
+        run: ls -la "$HOME/acbau/out/" || true
+
+      - name: ISO pruefen
         run: |
-          cat "$HOME/fortschritt.json" || true
-          echo
-          ls -la "$HOME/acbau/out/" || true
-          tail -60 "$HOME/fortschritt.ausgabe.log" || true
+          PYTHONPATH=src python -m archcustomiser \
+            --verify-iso "$HOME"/acbau/out/*.iso
 
       - name: ISO mitnehmen
-        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: iso-container-${{ inputs.engine }}

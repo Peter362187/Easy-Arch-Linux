@@ -25,10 +25,11 @@ import logging
 import re
 import os
 import tempfile
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, Mapping, Sequence
+from typing import Any, Literal
 
 import yaml
 
@@ -55,6 +56,14 @@ ProfileIssueCode = Literal[
     "secret_dropped",
     "invalid_package",
 ]
+
+
+# Innerhalb von ``ProfileService`` verdeckt die Methode ``list()`` den
+# eingebauten Typ: eine Annotation ``list[ProfileIssue]`` bezeichnet dort
+# die Methode, nicht die Liste. Diese Aliase stehen deshalb hier oben, wo
+# ``list`` noch der eingebaute Typ ist.
+_Issues = list  # type: ignore[assignment]
+_Namen = list  # type: ignore[assignment]
 
 
 class ProfileError(Exception):
@@ -167,7 +176,7 @@ class ProfileService:
             "schema_version": SCHEMA_VERSION,
             "catalog_version": self.catalog.catalog_version,
             "name": config.profile_name or path.stem,
-            "created": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+            "created": datetime.now(UTC).replace(microsecond=0).isoformat(),
             "selections": {key: sorted(value) for key, value in sorted(selections.items())},
             "fields": self._fields_without_secrets(config),
         }
@@ -330,32 +339,30 @@ class ProfileService:
             # Eintraege hinzugefuegt haben (eine entfernte Option, die im
             # Snapshot als Paket auftaucht). Ein Ueberschreiben wuerde genau
             # die Daten verlieren, die gerettet werden sollten.
+            #
+            # Jeder Name geht durch validate_name. Der Docstring von names.py
+            # verlangt das ausdruecklich fuer jeden Namen aus einer Profildatei
+            # -- hier geschah es bisher nicht, und ein von Hand bearbeitetes
+            # Profil brachte damit einen Eintrag wie '--dbpath=/' unveraendert
+            # bis in packages.x86_64 und damit in die Argumentliste von
+            # pacstrap.
             for name in extra:
-                text = str(name).strip()
-                # Dieselbe Pruefung wie im Freitextfeld. Bis zum 07.09.2026
-                # fehlte sie hier: ein Paketname aus einer Profildatei landete
-                # ungeprueft in packages.x86_64 und in archinstall.json. Eine
-                # Profildatei ist aber genauso wenig vertrauenswuerdig wie eine
-                # Tastatureingabe -- sie wird weitergegeben und heruntergeladen.
-                basis, _einschraenkung = split_constraint(text)
-                try:
-                    validate_name(basis)
-                except InvalidPackageName as fehler:
+                text = str(name)
+                if text in config.extra_packages:
+                    continue
+                geprueft = _geprueftes_paket(text)
+                if geprueft is None:
                     issues.append(
                         ProfileIssue(
                             severity="warning",
                             code="invalid_package",
                             ref=text,
-                            message=(
-                                f"{text!r} ist kein gueltiger Paketname "
-                                f"({fehler.reason}) und wurde nicht uebernommen."
-                            ),
+                            message=f"Der Paketname {text!r} ist nicht zulaessig.",
                             action_taken="verworfen",
                         )
                     )
                     continue
-                if text not in config.extra_packages:
-                    config.extra_packages.append(text)
+                config.extra_packages.append(geprueft)
 
         repos = data.get("extra_repositories") or []
         if isinstance(repos, Sequence) and not isinstance(repos, str):
@@ -379,7 +386,26 @@ class ProfileService:
 
         choices = data.get("provider_choices") or {}
         if isinstance(choices, Mapping):
-            config.provider_choices = {str(k): str(v) for k, v in choices.items()}
+            geprueft_gewaehlt: dict[str, str] = {}
+            for virtual, provider in choices.items():
+                name = _geprueftes_paket(str(virtual))
+                wert = _geprueftes_paket(str(provider))
+                if name is None or wert is None:
+                    issues.append(
+                        ProfileIssue(
+                            severity="warning",
+                            code="invalid_package",
+                            ref=str(virtual),
+                            message=(
+                                f"Die Anbieterwahl {virtual!r} -> {provider!r} "
+                                f"enthaelt einen unzulaessigen Paketnamen."
+                            ),
+                            action_taken="verworfen",
+                        )
+                    )
+                    continue
+                geprueft_gewaehlt[name] = wert
+            config.provider_choices = geprueft_gewaehlt
 
         result = ProfileLoadResult(
             config=config,
@@ -400,8 +426,8 @@ class ProfileService:
         category_id: str,
         option_id: str,
         config: BuildConfig,
-        issues: list[ProfileIssue],
-        snapshot_packages: list[str],
+        issues: _Issues[ProfileIssue],
+        snapshot_packages: _Namen[str],
     ) -> None:
         """Erster Treffer gewinnt; ein Fehlschlag ist nie fatal."""
         ref = f"{category_id}.{option_id}"
@@ -439,8 +465,7 @@ class ProfileService:
                     code="renamed",
                     ref=ref,
                     message=(
-                        f"{ref} heisst inzwischen "
-                        f"{self.catalog.option(alias_target).label if self.catalog.option(alias_target) else alias_target}."
+                        f"{ref} heisst inzwischen {_beschriftung(self.catalog, alias_target)}."
                     ),
                     action_taken=f"auf {alias_target} abgebildet",
                 )
@@ -562,3 +587,37 @@ def _field_predicate_true(predicate: Any, config: BuildConfig) -> bool:
         return bool(predicate.evaluate(_FieldOnlyContext(config)))
     except Exception:
         return True
+
+
+def _geprueftes_paket(text: str) -> str | None:
+    """Ein Paketname, wie ihn die Sicherheitsgrenze in names.py verlangt.
+
+    Versionsangaben (``firefox>=140``) sind in ``packages.x86_64`` erlaubt und
+    werden deshalb vom Namen getrennt geprueft, nicht abgelehnt.
+
+    Liefert ``None``, wenn der Name nicht zulaessig ist -- der Aufrufer meldet
+    das als ProfileIssue, statt ihn stillschweigend weiterzureichen.
+    """
+    from .packages.names import InvalidPackageName, split_constraint, validate_name
+
+    roh = text.strip()
+    if not roh:
+        return None
+    try:
+        name, _bedingung = split_constraint(roh)
+        validate_name(name)
+    except InvalidPackageName:
+        return None
+    except Exception:
+        return None
+    return roh
+
+
+def _beschriftung(catalog, ref: str) -> str:
+    """Die Beschriftung einer Option -- oder ihre Kennung, wenn es sie nicht gibt.
+
+    Ein Alias kann auf eine inzwischen entfernte Option zeigen; der Code
+    rechnet an anderer Stelle selbst damit.
+    """
+    option = catalog.option(ref)
+    return option.label if option is not None else ref

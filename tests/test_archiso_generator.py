@@ -16,7 +16,6 @@ import pytest
 from archcustomiser.core.archiso import ProfileGenerator
 from archcustomiser.core.archiso.errors import ProfileError, UnsafeValueError
 from archcustomiser.core.archiso.quoting import bash_array, bash_assoc, shell_quote
-from archcustomiser.core.archiso.settings import build_settings
 from archcustomiser.core.config import BuildConfig
 from archcustomiser.core.secrets import SecretStore
 

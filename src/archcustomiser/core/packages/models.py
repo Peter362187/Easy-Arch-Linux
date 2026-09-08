@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from enum import Enum, auto
 
 
@@ -49,6 +49,19 @@ class IndexMetadata:
     arch: str
     repos: tuple[RepoMeta, ...]
     schema_version: int = 1
+    missing_repos: tuple[str, ...] = ()
+    """Repositorien, die nicht geladen werden konnten.
+
+    Ohne dieses Feld galt ein Teilindex als vollstaendig: fiel nur ``core``
+    aus, meldete die Pruefung 'linux', 'base' und alles andere daraus als
+    "nicht gefunden" -- blockierend, mit Tippfehler-Vorschlaegen. Genau die
+    falsche Aussage, die die zentrale Zusicherung der Schicht verbietet.
+    """
+
+    @property
+    def complete(self) -> bool:
+        """Ob ueber *alle* angefragten Repositorien Daten vorliegen."""
+        return not self.missing_repos
 
     @property
     def data_updated_at(self) -> datetime | None:
@@ -69,8 +82,8 @@ class IndexMetadata:
         if reference is None:
             return None
         if reference.tzinfo is None:
-            reference = reference.replace(tzinfo=timezone.utc)
-        return datetime.now(timezone.utc) - reference
+            reference = reference.replace(tzinfo=UTC)
+        return datetime.now(UTC) - reference
 
     @property
     def package_count(self) -> int:
@@ -179,7 +192,11 @@ class Resolution:
         if self.kind is EntryKind.GROUP:
             return f"Paketgruppe mit {len(self.members)} Paketen"
         if self.kind is EntryKind.PROVIDES_UNIQUE:
-            return f"wird bereitgestellt von {self.members[0]}"
+            # Bei getroffener Anbieterwahl stand hier weiterhin der
+            # alphabetisch erste Anbieter -- also nicht der, der
+            # tatsaechlich in die Paketliste wandert.
+            anbieter = self.chosen or (self.members[0] if self.members else self.normalized)
+            return f"wird bereitgestellt von {anbieter}"
         if self.kind is EntryKind.PROVIDES_AMBIG:
             return f"wird von {len(self.members)} Paketen bereitgestellt -- bitte eines auswaehlen"
         if self.kind is EntryKind.AUR:
@@ -223,6 +240,29 @@ class ValidationReport:
     @property
     def ambiguous(self) -> tuple[Resolution, ...]:
         return tuple(entry for entry in self.entries if entry.kind is EntryKind.PROVIDES_AMBIG)
+
+    def required_repositories(self) -> tuple[str, ...]:
+        """Repositorien, die fuer die geprueften Namen aktiviert sein muessen.
+
+        Der Katalog nennt ``repos: [multilib]`` nur an den Optionen, die es
+        brauchen. Ein frei eingegebenes ``lib32-...`` wurde dagegen gegen
+        multilib geprueft und als gefunden gemeldet -- aber die erzeugte
+        pacman.conf aktivierte das Repository nicht, und pacstrap brach
+        mitten im Bau mit "target not found" ab.
+
+        ``core`` und ``extra`` sind in jeder pacman.conf ohnehin aktiv und
+        bleiben deshalb aussen vor.
+        """
+        immer_da = {"core", "extra"}
+        return tuple(
+            sorted(
+                {
+                    entry.repo
+                    for entry in self.entries
+                    if entry.kind.is_usable and entry.repo and entry.repo not in immer_da
+                }
+            )
+        )
 
     def profile_packages(self) -> tuple[str, ...]:
         """Namen fuer packages.x86_64 -- Gruppen unexpandiert."""

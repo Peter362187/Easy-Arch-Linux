@@ -12,9 +12,10 @@ abstuerzen.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 MAX_HOSTNAME_LENGTH = 63
 MAX_USERNAME_LENGTH = 32
@@ -431,6 +432,17 @@ _REGISTRY: dict[str, Validator] = {
     "splash_image": validate_splash_image,
     "writable_dir": validate_writable_dir,
 }
+
+def registry_names() -> frozenset[str]:
+    """Die im Katalog erlaubten Validatornamen.
+
+    Der Loader prueft dagegen. Ohne diese Pruefung deaktivierte ein Tippfehler
+    im YAML die Feldpruefung lautlos: ``validate()`` gibt bei einem unbekannten
+    Namen kommentarlos "in Ordnung" zurueck -- und ein Feld, das eigentlich
+    einen Hostnamen pruefen sollte, nahm alles an.
+    """
+    return frozenset(_REGISTRY)
+
 
 
 def validate(name: str, value: Any) -> ValidationResult:

@@ -27,8 +27,8 @@ den Schalter deshalb immer.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Iterator
 
 # Format aller mkarchiso-Meldungen: "[mkarchiso] INFO: <text>".
 # LC_ALL=C.UTF-8 setzt mkarchiso selbst -- die Texte sind immer englisch.

@@ -13,7 +13,7 @@ den Benutzer dazu bringt, einen korrekten Namen zu loeschen.
 from __future__ import annotations
 
 import logging
-from typing import Iterable, Sequence
+from collections.abc import Iterable, Sequence
 
 from .index import RepoIndex
 from .models import BackendProblem, EntryKind, IndexMetadata, Resolution, ValidationReport
@@ -126,6 +126,27 @@ def classify(
                 + [
                     "pacman wuerde hier nachfragen. Da der ISO-Build ohne Rueckfrage "
                     "laeuft, muss der Anbieter vorher feststehen."
+                ]
+            ),
+        )
+
+    fehlend = getattr(index.meta, "missing_repos", ())
+    if fehlend:
+        # Die zentrale Zusicherung der Schicht: ein Name gilt nur dann als
+        # nicht vorhanden, wenn ein vollstaendiger Index vorliegt. Fiel
+        # bisher ein Repository aus, wurde der Rest trotzdem als vollstaendig
+        # behandelt -- und jedes Paket daraus blockierte den Weiter-Knopf.
+        return Resolution(
+            query=query,
+            normalized=name,
+            kind=EntryKind.UNVERIFIED,
+            constraint=constraint,
+            notes=tuple(
+                notes
+                + [
+                    "Nicht pruefbar: die Paketdaten von "
+                    + ", ".join(fehlend)
+                    + " konnten nicht geladen werden."
                 ]
             ),
         )

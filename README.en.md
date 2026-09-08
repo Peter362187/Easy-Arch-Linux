@@ -7,7 +7,10 @@
 
 If you’re too lazy or too stupid to set up Arch Linux yourself, this is a real goldmine for you.
 This tool lets you create a bootable Arch ISO file that you can easily customize using a nice graphical interface; once you're done, you can finally tell everyone you use Arch Linux, even though you haven't got a clue what you're actually doing.
-You can find a better, more detailed guide here:
+A better, more detailed guide is further down this page —
+[Installation](#installation), [Command line](#command-line) and
+[Architecture](#architecture-briefly). The full documentation is German:
+[README.md](README.md).
 
 A graphical builder for custom Arch Linux based live ISOs.
 
@@ -19,6 +22,12 @@ This is **not** a reimplementation of Arch Linux. It is an automation layer on
 top of the official infrastructure: `archiso`, `pacman`, the official
 repositories, `systemd` and `archinstall`. Dependency resolution is done by
 pacman, not by this program.
+
+![The application selection page](docs/screenshots/dunkel-apps.png)
+
+On the left the step list, including the steps that do not apply to your
+selection at all. On the right, at all times, the answer to "what actually ends
+up in my ISO". In the middle, the choice itself.
 
 ---
 
@@ -82,7 +91,7 @@ stays responsive while the build is being stopped.
 1. **Code → Download ZIP** on the project page, or:
 
    ```bash
-   git clone https://github.com/Peter362187/ArchCustomiser.git
+   git clone https://github.com/Peter362187/Easy-Arch-Linux.git
    ```
 
 2. Double-click **`ArchCustomiser.bat`**.
@@ -95,7 +104,7 @@ Python to PATH"**. Python 3.11 or newer is required.
 ### Linux and macOS
 
 ```bash
-git clone https://github.com/Peter362187/ArchCustomiser.git && cd ArchCustomiser
+git clone https://github.com/Peter362187/Easy-Arch-Linux.git && cd Easy-Arch-Linux
 ```
 
 ```bash
@@ -124,7 +133,7 @@ python -m venv .venv && .venv/bin/pip install -e ".[dev]"
 Or, without a source directory:
 
 ```bash
-pipx install git+https://github.com/Peter362187/ArchCustomiser.git
+pipx install git+https://github.com/Peter362187/Easy-Arch-Linux.git
 ```
 
 **On a minimal Linux install** PySide6 ships Qt but not its system libraries, so
@@ -157,6 +166,34 @@ python -m archcustomiser --dry-run src/archcustomiser/profiles/gaming.yaml
 python -m archcustomiser --export-profile src/archcustomiser/profiles/gaming.yaml --out ~/flos-profile.tar.gz
 ```
 
+And with no display at all — for a server, an SSH session, or a script that
+builds overnight:
+
+```bash
+python -m archcustomiser --build ~/my-profile.yaml --out-dir ~/isos
+```
+
+Progress goes to stderr, the summary to stdout, so `--build … > result.txt`
+holds the summary and not three thousand mkarchiso lines. `Ctrl+C` cancels the
+build instead of killing it. A password is read from standard input and never
+from an argument — on Linux an argument is readable by anyone via `/proc`:
+
+```bash
+pass show arch/live | python -m archcustomiser --build profile.yaml --password-stdin
+```
+
+Exit codes: `0` done, `1` failed, `2` bad input, `3` cancelled, `4` preflight
+blocked.
+
+```bash
+python -m archcustomiser --verify-iso ~/isos/flos-1.0-x86_64.iso
+python -m archcustomiser --history
+```
+
+The first checks an existing ISO for plausibility — CD001 signature, MBR
+signature, El Torito boot catalogue, sector alignment. The second lists what
+has been built on this machine.
+
 ---
 
 ## Architecture, briefly
@@ -170,6 +207,9 @@ src/archcustomiser/
 │   ├── build/               three build paths (local, WSL, container)
 │   └── …
 ├── gui/                     PySide6
+│   ├── navigation.py        step model — no Qt, testable without a display
+│   ├── design/              colours, spacing, type, theme switching
+│   └── previews/            previews, wired up through the catalog
 ├── data/catalog/            the entire option set, as YAML
 └── profiles/                bundled profiles
 ```
@@ -243,8 +283,13 @@ The complete documentation is German:
 * **[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)** — architecture, design decisions
   and the reasoning behind them
 
-561 tests, no network and no display required:
+Over 700 tests, no network and no display required:
 
 ```bash
 python -m pytest -q
 ```
+
+The same run happens on [GitHub Actions](.github/workflows/ci.yml) for every
+push: Ubuntu, Windows and macOS x Python 3.11 to 3.13, plus `ruff`, `mypy` and
+a job that imports `core/` **without PySide6 installed** — with Qt present, an
+accidental import could slip through unnoticed.

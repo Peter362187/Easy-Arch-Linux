@@ -28,6 +28,7 @@ category:
 fields:
 
   - id: bios_boot
+    preview_role: "bios_boot"
     label: "BIOS-Start unterstuetzen (syslinux)"
     widget: bool
     default: true
@@ -36,6 +37,7 @@ fields:
       das mkarchiso dafuer zwingend in der Paketliste erwartet.
 
   - id: uefi_boot
+    preview_role: "uefi_bootloader"
     label: "UEFI-Bootloader"
     widget: combo
     default: "systemd-boot"
@@ -71,6 +73,7 @@ fields:
       Arbeitsspeicher. Zu klein gewaehlt, laeuft eine Desktop-Sitzung voll.
 
   - id: boot_timeout
+    preview_role: "boot_timeout"
     label: "Wartezeit im Bootmenue (Sekunden)"
     widget: int
     default: 15
@@ -88,6 +91,7 @@ fields:
       installiert werden kann.
 
   - id: include_memtest
+    preview_role: "include_memtest"
     label: "Speichertest ins Bootmenue aufnehmen"
     widget: bool
     default: false

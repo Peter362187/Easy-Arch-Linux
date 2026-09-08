@@ -18,8 +18,7 @@ import pytest
 from archcustomiser.core.build.targets import BuildPaths, LocalTarget
 
 sys.path.insert(0, str(Path(__file__).parent))
-from fake_target import FakeTarget   # noqa: E402
-
+from fake_target import FakeTarget
 
 # ---------------------------------------------------------------------------
 # Der Controller darf den Zieltyp nicht mehr kennen
@@ -32,9 +31,15 @@ def test_the_controller_no_longer_asks_for_the_target_type() -> None:
     Als Test formuliert, damit ein spaeteres viertes Ziel nicht wieder mit
     einer isinstance-Abfrage nachgeruestet wird.
     """
-    quelle = Path("src/archcustomiser/core/build/controller.py").read_text(
-        encoding="utf-8"
-    )
+    # Ueber das Modul selbst, nicht ueber einen relativen Pfad: sonst haengt
+    # der Test am Arbeitsverzeichnis des pytest-Aufrufs und faellt anderswo
+    # mit FileNotFoundError aus einem Grund, der nichts mit der Zusicherung
+    # zu tun hat.
+    import inspect
+
+    from archcustomiser.core.build import controller as controller_modul
+
+    quelle = inspect.getsource(controller_modul)
     assert "isinstance(self.target" not in quelle
     assert "self.target.wsl" not in quelle, "auch der Durchgriff muss weg sein"
 
@@ -266,3 +271,124 @@ def test_build_paths_stay_strings() -> None:
     paths = BuildPaths(profile="/home/x/profil", work="/home/x/work", out="/home/x/out")
     assert all(isinstance(wert, str) for wert in paths.as_tuple())
     assert paths.as_tuple() == ("/home/x/profil", "/home/x/work", "/home/x/out")
+
+
+# ---------------------------------------------------------------------------
+# Was nach einem Fehlschlag liegenbleibt
+# ---------------------------------------------------------------------------
+
+
+def test_cleanup_happens_even_when_the_build_fails(controller_mit_ziel) -> None:
+    """Der Fehlerzweig schrieb nur das Protokoll und raeumte nie auf.
+
+    Ein in mksquashfs gescheiterter Bau hinterliess damit 10 bis 30 GB
+    Arbeitsverzeichnis -- bei WSL in einer virtuellen Platte, die nur waechst.
+    Die Vorabpruefung meldete das beim naechsten Mal als "Reste frueherer
+    Bauten": ein Symptom genau dieser Luecke.
+    """
+    from archcustomiser.core.build.errors import BuildFailed
+
+    controller, ziel, tmp_path = controller_mit_ziel
+
+    class ScheiternderRunner:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def run(self, **kwargs):
+            raise BuildFailed(1, ("mksquashfs: kein Platz",))
+
+        def cancel(self) -> None:
+            pass
+
+    controller.runner_factory = ScheiternderRunner
+    with pytest.raises(BuildFailed):
+        controller.run(tmp_path / "work", tmp_path / "out", skip_preflight=True)
+
+    assert ziel.called("discard"), "nach dem Fehlschlag wurde nicht aufgeraeumt"
+
+
+def test_an_unexpected_error_is_logged_and_cleaned_up(controller_mit_ziel) -> None:
+    """ContainerError erbt nicht von BuildError -- und entkam damit dem Zweig."""
+    controller, ziel, tmp_path = controller_mit_ziel
+
+    class FremderFehler(Exception):
+        pass
+
+    class ExplodierenderRunner:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def run(self, **kwargs):
+            raise FremderFehler("die Engine mag nicht")
+
+        def cancel(self) -> None:
+            pass
+
+    controller.runner_factory = ExplodierenderRunner
+    with pytest.raises(FremderFehler):
+        controller.run(tmp_path / "work", tmp_path / "out", skip_preflight=True)
+
+    assert ziel.called("discard")
+
+
+def test_cleanup_waits_for_the_cancel_to_finish(controller_mit_ziel) -> None:
+    """Abbruch und Aufraeumen liefen ungebremst nebeneinander.
+
+    Sobald pkill den Bau beendet, kehrt der Bau-Faden zurueck und beginnt mit
+    'rm -rf <arbeitsverzeichnis>'. Das Kill-Muster ist genau dieser Pfad: die
+    Nachkontrolle sah damit das eigene Aufraeum-rm, eskalierte auf KILL und
+    liess ein halb geloeschtes Verzeichnis zurueck.
+    """
+    import threading
+    import time
+
+    from archcustomiser.core.build.errors import BuildCancelled
+
+    controller, ziel, tmp_path = controller_mit_ziel
+    reihenfolge: list[str] = []
+
+    original_cancel_run = ziel.cancel_run
+
+    def langsamer_abbruch(process, *, grace_seconds):
+        reihenfolge.append("abbruch-start")
+        time.sleep(0.3)
+        reihenfolge.append("abbruch-ende")
+        return original_cancel_run(process, grace_seconds=grace_seconds)
+
+    ziel.cancel_run = langsamer_abbruch
+
+    original_discard = ziel.discard
+
+    def merkendes_discard(*args, **kwargs):
+        reihenfolge.append("aufraeumen")
+        return original_discard(*args, **kwargs)
+
+    ziel.discard = merkendes_discard
+
+    class AbbrechenderRunner:
+        """Loest den Abbruch aus, sobald der Bau tatsaechlich laeuft."""
+
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def run(self, **kwargs):
+            faden = threading.Thread(target=controller.cancel)
+            faden.start()
+            # Warten, bis der Abbruch begonnen hat -- danach verhaelt sich der
+            # Runner wie ein von pkill beendeter Prozess.
+            while "abbruch-start" not in reihenfolge:
+                time.sleep(0.01)
+            raise BuildCancelled()
+
+        def cancel(self) -> None:
+            # Wie MkarchisoRunner.cancel: der Abbruch geht ueber das Ziel.
+            ziel.cancel_run(None, grace_seconds=0.0)
+
+    controller.runner_factory = AbbrechenderRunner
+    with pytest.raises(BuildCancelled):
+        controller.run(tmp_path / "work", tmp_path / "out", skip_preflight=True)
+
+    assert "aufraeumen" in reihenfolge
+    assert reihenfolge.index("abbruch-ende") < reihenfolge.index("aufraeumen"), (
+        "aufgeraeumt wurde, waehrend der Abbruch noch lief"
+    )

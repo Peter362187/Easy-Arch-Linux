@@ -9,8 +9,6 @@ beim Weg ueber ein Windows-Laufwerk.
 
 from __future__ import annotations
 
-import io
-import tarfile
 from pathlib import Path, PurePosixPath
 
 import pytest
@@ -18,7 +16,6 @@ import pytest
 from archcustomiser.core.archiso.tree import ProfileTree
 from archcustomiser.core.build import wsl
 from archcustomiser.core.build.targets import LocalTarget, WslExecutionTarget
-
 
 # ---------------------------------------------------------------------------
 # Kodierung
@@ -37,7 +34,7 @@ def test_management_output_is_utf16() -> None:
 
 def test_management_output_falls_back_to_utf8() -> None:
     """Falls Microsoft das eines Tages aendert."""
-    assert wsl._decode_management("Hallo Welt".encode("utf-8")) == "Hallo Welt"
+    assert wsl._decode_management(b"Hallo Welt") == "Hallo Welt"
 
 
 def test_empty_output() -> None:
@@ -97,15 +94,56 @@ def test_status_without_arch_is_not_usable() -> None:
     assert status.preferred is None
 
 
-def test_detect_does_not_raise_on_this_machine() -> None:
-    """Egal wie das System aussieht -- die Erkennung darf nie werfen."""
+def test_detect_does_not_raise_when_wsl_is_missing(monkeypatch) -> None:
+    """Egal wie das System aussieht -- die Erkennung darf nie werfen.
+
+    Frueher startete dieser Test das echte ``wsl.exe`` (zwei Aufrufe mit je
+    60 s Zeitlimit) und pruefte danach nur, dass ``installed`` ein bool ist.
+    Ergebnis und Laufzeit hingen damit vom Rechner ab. Hier wird die
+    Verwaltungsschicht ersetzt und beide Ausgaenge geprueft.
+    """
+    monkeypatch.setattr(wsl, "wsl_executable", lambda: None)
     status = wsl.detect()
     assert isinstance(status.installed, bool)
+    assert not status.installed
+    assert status.problem
+
+
+def test_detect_reports_a_missing_subsystem(monkeypatch) -> None:
+    """Exit-Code 50 heisst: WSL ist gar nicht eingerichtet."""
+    import subprocess
+
+    meldung = "Das Windows-Subsystem fuer Linux ist nicht installiert." + chr(13) + chr(10)
+
+    monkeypatch.setattr(wsl.os, "name", "nt")
+    monkeypatch.setattr(wsl, "wsl_executable", lambda: "wsl.exe")
+    monkeypatch.setattr(
+        wsl.subprocess,
+        "run",
+        lambda *a, **k: subprocess.CompletedProcess(
+            a[0] if a else [], wsl.EXIT_NOT_INSTALLED, b"", meldung.encode("utf-16-le")
+        ),
+    )
+    status = wsl.detect()
+    assert not status.installed
+    assert "nicht installiert" in status.problem
 
 
 # ---------------------------------------------------------------------------
 # Aufrufe
 # ---------------------------------------------------------------------------
+
+
+def wsl_paths(wurzel: str = "/home/jason/.cache/archcustomiser/flos"):
+    """Die Verzeichnisse eines Baus in der Verteilung."""
+    from archcustomiser.core.build.wsl_build import WslPaths
+
+    return WslPaths(
+        root=PurePosixPath(wurzel),
+        profile=PurePosixPath(wurzel + "/profile"),
+        work=PurePosixPath(wurzel + "/work"),
+        out=PurePosixPath(wurzel + "/out"),
+    )
 
 
 class FakeWsl:
@@ -120,7 +158,7 @@ class FakeWsl:
     def wrap(self, argv):
         return ["wsl.exe", "-d", self.distribution, "-e", *[str(a) for a in argv]]
 
-    def run(self, argv, *, timeout: float = 60.0) -> wsl.WslResult:
+    def run(self, argv, *, timeout: float = 60.0, as_root: bool = False) -> wsl.WslResult:
         arguments = tuple(str(a) for a in argv)
         self.calls.append(arguments)
         for key, value in self.responses.items():
@@ -482,7 +520,7 @@ def test_linux_iso_path_is_never_mangled_by_pathlib() -> None:
     meldete "cannot stat". Die ISO war fertig gebaut, nur nicht mehr
     auffindbar.
     """
-    from archcustomiser.core.build.runner import BuildResult, MkarchisoRunner
+    from archcustomiser.core.build.runner import BuildResult
 
     fake = FakeWsl()
     fake.responses = {
@@ -541,3 +579,152 @@ def test_cleanup_removes_the_iso_once_it_is_on_windows() -> None:
     cleanup(fake, paths, remove_output=True)
     entfernt = [" ".join(c) for c in fake.calls if c[0] == "rm"]
     assert any("/root/x/out" in c for c in entfernt)
+
+
+# ---------------------------------------------------------------------------
+# Kein Konsolenfenster, keine geerbte Eingabe
+# ---------------------------------------------------------------------------
+
+
+def test_wsl_calls_hide_the_console_window(monkeypatch) -> None:
+    """Unter pythonw.exe legt Windows fuer jedes Konsolenprogramm ein Fenster an.
+
+    Auch mit capture_output: die Umleitung betrifft die Datenstroeme, nicht
+    das Fenster. Waehrend eines Abbruchs laufen pgrep und pkill im
+    Halbsekundentakt -- dort flackerte es, bis der Bau stand, und stahl dabei
+    den Fokus.
+    """
+    import subprocess as sp
+
+    from archcustomiser.core import subprocess_util
+
+    gesehen: dict[str, object] = {}
+
+    def merken(argv, **kwargs):
+        gesehen.update(kwargs)
+        gesehen["argv"] = argv
+        return sp.CompletedProcess(argv, 0, b"", b"")
+
+    monkeypatch.setattr(subprocess_util.os, "name", "nt")
+    monkeypatch.setattr(subprocess_util.subprocess, "run", merken)
+    monkeypatch.setattr(wsl, "wsl_executable", lambda: "wsl.exe")
+
+    wsl.WslTarget("archlinux").run(["true"])
+
+    flagge = getattr(sp, "CREATE_NO_WINDOW", 0x08000000)
+    assert gesehen.get("creationflags", 0) & flagge, "das Fenster blitzt weiterhin auf"
+
+
+def test_wsl_calls_never_inherit_stdin(monkeypatch) -> None:
+    """Ein nachfragendes Programm haengt sonst bis zum Zeitlimit.
+
+    'pacman -Syu archiso' laeuft mit 900 Sekunden Frist und ohne
+    Abbrechen-Knopf. Fragt es nach einem Schluesselbund, wartete es ohne EOF
+    die vollen fuenfzehn Minuten.
+    """
+    import subprocess as sp
+
+    from archcustomiser.core import subprocess_util
+
+    gesehen: dict[str, object] = {}
+
+    def merken(argv, **kwargs):
+        gesehen.update(kwargs)
+        return sp.CompletedProcess(argv, 0, b"", b"")
+
+    monkeypatch.setattr(subprocess_util.subprocess, "run", merken)
+    monkeypatch.setattr(wsl, "wsl_executable", lambda: "wsl.exe")
+
+    wsl.WslTarget("archlinux").run(["true"])
+    assert gesehen.get("stdin") is sp.DEVNULL
+
+
+def test_management_errors_survive_utf16(monkeypatch) -> None:
+    """Meldungen von wsl.exe selbst sind UTF-16-LE, auch auf stderr.
+
+    Ohne Unterscheidung landete "Es gibt keine Verteilung mit dem angegebenen
+    Namen." mit Nullbytes im Fehlerdialog.
+    """
+    import subprocess as sp
+
+    from archcustomiser.core import subprocess_util
+
+    meldung = "Es gibt keine Verteilung mit dem angegebenen Namen."
+    monkeypatch.setattr(
+        subprocess_util.subprocess,
+        "run",
+        lambda argv, **k: sp.CompletedProcess(argv, 1, b"", meldung.encode("utf-16-le")),
+    )
+    monkeypatch.setattr(wsl, "wsl_executable", lambda: "wsl.exe")
+
+    ergebnis = wsl.WslTarget("gibtsnicht").run(["true"])
+    assert ergebnis.stderr.strip() == meldung
+    assert chr(0) not in ergebnis.stderr
+
+
+def test_utf16_detection_survives_non_latin_messages() -> None:
+    """Auf japanischem Windows griff die Nullbyte-Quote nicht.
+
+    In UTF-16-LE traegt nur ein Zeichen unter U+0100 ein Nullbyte; Katakana
+    also keines. Die frueher verlangten 25 Prozent kamen damit nie zustande,
+    und die Meldung wurde als UTF-8 zu Zeichensalat.
+    """
+    japanisch = "Linux 用 Windows サブシステムがインストールされていません。"
+    assert wsl._decode_management(japanisch.encode("utf-16-le")) == japanisch
+
+    russisch = "Подсистема Windows для Linux не установлена."
+    assert wsl._decode_management(russisch.encode("utf-16-le")) == russisch
+
+    # Der umgekehrte Fall muss weiterhin stimmen: UTF-8 bleibt UTF-8.
+    deutsch = "Die Verteilung wurde nicht gefunden."
+    assert wsl._decode_management(deutsch.encode("utf-8")) == deutsch
+
+
+def test_cleanup_unmounts_before_deleting() -> None:
+    """Ein abgebrochener pacstrap laesst acht Einhaengungen zurueck.
+
+    Ein 'rm -rf' als root steigt dort hinein und loescht Geraeteknoten in /dev
+    und den Inhalt von /run der Verteilung. Deshalb zuerst umount -R, und das
+    Loeschen mit --one-file-system als zweite Sicherung.
+    """
+    from archcustomiser.core.build.wsl_build import cleanup
+
+    fake = FakeWsl()
+    pfade = wsl_paths()
+    cleanup(fake, pfade, keep_work_dir=False)
+
+    reihenfolge = [" ".join(argv) for argv in fake.calls]
+    umount = next((i for i, z in enumerate(reihenfolge) if z.startswith("umount")), None)
+    loeschen = next(
+        (i for i, z in enumerate(reihenfolge) if "rm -rf" in z and str(pfade.work) in z),
+        None,
+    )
+    assert umount is not None, "es wird nicht ausgehaengt"
+    assert loeschen is not None
+    assert umount < loeschen, "erst loeschen, dann aushaengen -- falsche Reihenfolge"
+    assert all(
+        "--one-file-system" in z for z in reihenfolge if z.startswith("rm -rf")
+    ), "rm steigt weiterhin ueber Dateisystemgrenzen"
+
+
+def test_a_failing_symlink_check_is_not_silently_accepted(tmp_path) -> None:
+    """Die Gegenprobe griff nur, wenn find ueberhaupt eine Zahl lieferte.
+
+    Schlug der Aufruf fehl, galt die Uebertragung stillschweigend als in
+    Ordnung -- genau der Fall, den die Pruefung abfangen soll.
+    """
+    from archcustomiser.core.build.wsl_build import transfer_profile
+
+    baum = ProfileTree()
+    baum.add_file("profiledef.sh", "# leer", origin="test")
+    baum.add_symlink(
+        "airootfs/etc/systemd/system/x.service", "/usr/lib/systemd/system/x.service",
+        origin="test",
+    )
+
+    fake = FakeWsl()
+    fake.responses = {"find": wsl.WslResult(1, "", "find: kein Zugriff")}
+
+    with pytest.raises(wsl.WslError) as info:
+        transfer_profile(fake, baum, wsl_paths(), "flos")
+    assert "pruefen" in info.value.user_message

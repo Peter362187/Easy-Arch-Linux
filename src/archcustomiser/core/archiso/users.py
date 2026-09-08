@@ -28,9 +28,8 @@ jeden Benutzer des Systems lesbar.
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from ..secrets import Secret
 from .errors import HashingUnavailable
@@ -71,7 +70,7 @@ class UserAccount:
         Ein leeres Feld dort laesst manche Werkzeuge das Konto als abgelaufen
         ansehen, deshalb wird es gesetzt.
         """
-        days = int(datetime.now(timezone.utc).timestamp() // 86400)
+        days = int(datetime.now(UTC).timestamp() // 86400)
         return f"{self.username}:{password_hash}:{days}:0:99999:7:::"
 
 
@@ -86,7 +85,7 @@ def root_shadow_line(locked: bool = True) -> str:
     ein Rettungsmedium ist. Fuer ein Desktop-Abbild waere das ein passwortloser
     Administratorzugang -- deshalb hier standardmaessig gesperrt.
     """
-    days = int(datetime.now(timezone.utc).timestamp() // 86400)
+    days = int(datetime.now(UTC).timestamp() // 86400)
     return f"root:{LOCKED if locked else ''}:{days}::::::"
 
 

@@ -21,9 +21,10 @@ import os
 import shutil
 import tarfile
 import tempfile
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Callable, Protocol
+from typing import Protocol
 
 from .errors import SinkError, SymlinksUnsupportedError, TargetNotEmptyError
 from .tree import ProfileTree
@@ -31,13 +32,29 @@ from .tree import ProfileTree
 log = logging.getLogger(__name__)
 
 MARKER_NAME = ".archcustomiser-profile"
+
+
+def looks_like_ours(verzeichnis: Path) -> bool:
+    """Ob ein Verzeichnis ein von diesem Programm erzeugtes Profil ist.
+
+    Der Marker ist das sichere Kennzeichen; die zweite Bedingung faengt
+    Profile aus einer frueheren Fassung ab, die ihn noch nicht trugen.
+
+    Die Funktion steht hier auf Modulebene, weil auch ``build/targets.py`` sie
+    braucht: dort wird vor dem rekursiven Loeschen geprueft, nicht vor dem
+    Schreiben.
+    """
+    return (verzeichnis / MARKER_NAME).is_file() or (
+        (verzeichnis / "profiledef.sh").is_file()
+        and (verzeichnis / "airootfs").is_dir()
+    )
 PROGRESS_STEP = 25
 
 ProgressCallback = Callable[[int, int], None]   # (erledigt, gesamt)
 
 
 def _marker_content(iso_name: str) -> str:
-    stamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    stamp = datetime.now(UTC).replace(microsecond=0).isoformat()
     return (
         "# Von ArchCustomiser erzeugtes archiso-Profil.\n"
         "# Diese Datei kennzeichnet das Verzeichnis als ueberschreibbar.\n"
@@ -102,11 +119,7 @@ class DirectorySink:
         if self.force:
             return
 
-        looks_like_ours = (self.target / MARKER_NAME).is_file() or (
-            (self.target / "profiledef.sh").is_file()
-            and (self.target / "airootfs").is_dir()
-        )
-        if not looks_like_ours:
+        if not looks_like_ours(self.target):
             raise TargetNotEmptyError(str(self.target), len(entries))
 
     def _materialise(
@@ -115,22 +128,21 @@ class DirectorySink:
         total = tree.file_count + tree.symlink_count
         done = 0
 
+        streng = _strenge_pfade(tree)
+
         for entry in tree.files.values():
             destination = root / entry.path
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes(entry.content)
-            modus = tree.mode_for(entry.path, default=-1)
-            if modus >= 0 and os.name != "nt":
-                # Nur wo der Baum ausdruecklich Rechte anmeldet, und nur unter
-                # POSIX. Unter Windows kann os.chmod allein das Schreibschutz-
-                # Bit umlegen -- 0400 wuerde dort also nichts schuetzen (die
-                # Rechte sind ACLs), aber sehr wohl das spaetere Aufraeumen des
-                # Arbeitsverzeichnisses mit "Zugriff verweigert" scheitern
-                # lassen. Genau das ist beim Einbau passiert.
-                try:
-                    os.chmod(destination, modus)
-                except OSError:
-                    log.debug("Rechte fuer %s nicht setzbar", destination, exc_info=True)
+            if entry.path in streng:
+                # /etc/shadow traegt den Passwort-Hash. Die Rechte aus
+                # tree.permissions wirken erst im fertigen Abbild (mkarchiso
+                # kopiert das airootfs mit --no-preserve=mode); auf dem Host
+                # lag die Datei bis hierher mit 0644 -- fuer jeden anderen
+                # lokalen Benutzer lesbar, und in einem exportierten Profil
+                # sogar weitergegeben. sha512crypt mit 5000 Runden ist offline
+                # angreifbar.
+                _nur_fuer_mich(destination)
             done += 1
             if progress and done % PROGRESS_STEP == 0:
                 progress(done, total)
@@ -215,6 +227,7 @@ class TarSink:
         raw = io.BytesIO()
         total = tree.file_count + tree.symlink_count
         done = 0
+        streng = _strenge_pfade(tree)
 
         with tarfile.open(fileobj=raw, mode="w", format=tarfile.GNU_FORMAT) as archive:
             root = tarfile.TarInfo(self.root_name)
@@ -235,10 +248,12 @@ class TarSink:
                 if entry is not None:
                     info = tarfile.TarInfo(f"{self.root_name}/{path}")
                     info.size = len(entry.content)
-                    # Nicht mehr fest 0644: sonst laege der Passwort-Hash aus
-                    # etc/shadow im entpackten Archiv weltlesbar. Die Rechte
-                    # stehen fest im Baum, das Archiv bleibt reproduzierbar.
-                    info.mode = tree.mode_for(path)
+                    # Dieselbe Ueberlegung wie bei der Verzeichnis-Senke: ein
+                    # exportiertes Profil wird weitergegeben, und /etc/shadow
+                    # darf darin nicht weltlesbar liegen. Der feste Modus
+                    # bleibt sonst erhalten -- er haelt das Archiv bytegleich
+                    # reproduzierbar.
+                    info.mode = 0o600 if path in streng else 0o644
                     info.mtime = self.mtime
                     archive.addfile(info, io.BytesIO(entry.content))
                 else:
@@ -272,3 +287,41 @@ class TarSink:
             for index in range(1, len(parts) + 1):
                 found.add("/".join(parts[:index]))
         return tuple(sorted(found))
+
+
+def _strenge_pfade(tree: ProfileTree) -> frozenset[str]:
+    """Die Baumpfade, deren Rechte im Abbild keinen Fremdzugriff zulassen.
+
+    ``tree.permissions`` ist nach den Pfaden *im Abbild* geschluesselt
+    (``/etc/shadow``), die Dateien liegen im Baum aber unter ``airootfs/...``.
+    Diese Funktion bildet das eine auf das andere ab.
+
+    Beruecksichtigt wird alles, was fuer Gruppe und andere keinerlei Recht
+    vorsieht -- also 0400, 0600 und 0700. Genau dort stehen die Geheimnisse.
+    """
+    streng: set[str] = set()
+    for abbildpfad, eintrag in tree.permissions.items():
+        try:
+            rechte = int(str(eintrag.mode), 8)
+        except (TypeError, ValueError):
+            continue
+        if rechte & 0o077:
+            continue
+        baumpfad = "airootfs/" + str(abbildpfad).lstrip("/")
+        if baumpfad in tree.files:
+            streng.add(baumpfad)
+    return frozenset(streng)
+
+
+def _nur_fuer_mich(pfad: Path) -> None:
+    """Entzieht Gruppe und anderen jedes Recht -- soweit das System das kennt.
+
+    Unter Windows gibt es keine POSIX-Modi; dort ist der Aufruf wirkungslos
+    und darf deshalb nicht scheitern.
+    """
+    if os.name == "nt":
+        return
+    try:
+        pfad.chmod(0o600)
+    except OSError:
+        log.debug("Rechte von %s liessen sich nicht einschraenken", pfad, exc_info=True)

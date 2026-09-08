@@ -1,15 +1,15 @@
 """Die erste Seite: womit soll begonnen werden?
 
-Vorher landete man ohne Vorrede in "Grundkonfiguration" -- einem Formular. Die
-vier mitgelieferten Vorlagen (minimal, desktop, gaming, development) existierten
-zwar, waren aber nur ueber einen Knopf in der Fussleiste erreichbar und wurden
-darum praktisch nie gefunden. Wer eine nimmt, muss anschliessend nur noch
-anpassen, was ihm nicht passt, statt vierzehn Schritte durchzuklicken.
+Vorlagen, ein eigenes Profil oder ein leeres Blatt. Die Auswahl wird erst beim
+Verlassen angewendet: wer eine Vorlage nur ansieht und sich anders entscheidet,
+soll den Store nicht schon veraendert haben.
 
-Unter Windows erschien ausserdem beim Start eine Infobox "Hinweis zur
-Bauumgebung" -- der erste Eindruck war ein Dialog mit dem Wort "Hinweis", was
-nach einem Fehler aussieht. Dieselbe Auskunft steht jetzt ruhig auf dieser
-Seite.
+Der Fehler, den diese Seite frueher hatte, war teuer. "Von vorn beginnen" ist
+vorgehakt, und die Startseite ist ueber Zurueck erreichbar. Zurueck und wieder
+vor genuegte, um eine halbe Stunde Zusammenstellung wortlos zu loeschen -- die
+einzige Stelle im Programm, die Arbeit ohne Rueckfrage vernichtete, waehrend
+das Beenden ausdruecklich nachfragt. Jetzt wird nur angewendet, was sich
+tatsaechlich geaendert hat, und auch das nur nach Rueckfrage.
 """
 
 from __future__ import annotations
@@ -18,67 +18,162 @@ import logging
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
-    QButtonGroup,
     QFileDialog,
-    QFrame,
-    QHBoxLayout,
     QLabel,
     QMessageBox,
-    QRadioButton,
     QScrollArea,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
-    QWizardPage,
 )
 
 from ...core.environment import Environment
 from ...core.profiles import ProfileError, ProfileInfo, ProfileService
-from .. import theme
+from .. import motion
+from ..design import qfarbe, tokens
+from ..design.typo import BODY, CAPTION, schrift
 from ..store import SelectionStore
 from ..widgets.common import HeadlineLabel, HintLabel
+from .base import PageBase
 
 log = logging.getLogger(__name__)
 
-WELCOME_STEP = 1        # vor der ersten Katalogkategorie (kleinster step: 5)
 
+class _Auswahlkarte(QWidget):
+    """Eine grosse anklickbare Flaeche -- Titel, Erklaerung, Auswahlpunkt."""
 
-class _Choice(QFrame):
-    """Eine anklickbare Flaeche mit Titel und Erklaerung."""
+    gewaehlt = Signal(str)
 
-    def __init__(
-        self,
-        title: str,
-        description: str,
-        *,
-        parent: QWidget | None = None,
-    ) -> None:
+    def __init__(self, kennung: str, titel: str, text: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setObjectName("optionCard")     # nutzt das zentrale Stylesheet
-        self.setFrameShape(QFrame.Shape.StyledPanel)
+        self.kennung = kennung
+        self.titel = titel
+        self.text = text
+        self._aktiv = False
+        self._hover = 0.0
+        self._fuellung = 0.0
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(
-            theme.SPACE_MD, theme.SPACE_SM, theme.SPACE_MD, theme.SPACE_SM
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setAccessibleName(titel)
+        if text:
+            self.setAccessibleDescription(text)
+        self.setFixedHeight(self._hoehe())
+
+    def _hoehe(self) -> int:
+        werte = tokens()
+        zeilen = 2 if self.text else 1
+        return int(werte.space.md * 2 + 20 + (zeilen - 1) * 18)
+
+    # -- Zustand --------------------------------------------------------------
+    def setze_aktiv(self, wert: bool) -> None:
+        if self._aktiv == wert:
+            return
+        self._aktiv = wert
+        motion.animate(
+            self,
+            von=self._fuellung,
+            bis=1.0 if wert else 0.0,
+            dauer=motion.SCHNELL,
+            setzen=self._setze_fuellung,
         )
-        layout.setSpacing(theme.SPACE_XS)
 
-        self.button = QRadioButton(title)
-        font = self.button.font()
-        font.setBold(True)
-        self.button.setFont(font)
-        layout.addWidget(self.button)
+    def ist_aktiv(self) -> bool:
+        return self._aktiv
 
-        if description:
-            layout.addWidget(HintLabel(description))
+    def _setze_fuellung(self, wert) -> None:
+        self._fuellung = float(wert)
+        self.update()
 
-    def mousePressEvent(self, event) -> None:      # noqa: N802 -- Qt
-        # Die ganze Karte anklickbar machen, nicht nur den kleinen Knopf.
-        self.button.setChecked(True)
+    def _setze_hover(self, wert) -> None:
+        self._hover = float(wert)
+        self.update()
+
+    # -- Bedienung ------------------------------------------------------------
+    def enterEvent(self, event) -> None:
+        motion.animate(
+            self, von=self._hover, bis=1.0, dauer=motion.SCHNELL, setzen=self._setze_hover
+        )
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        motion.animate(
+            self, von=self._hover, bis=0.0, dauer=motion.SCHNELL, setzen=self._setze_hover
+        )
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event) -> None:
+        self.setFocus(Qt.FocusReason.MouseFocusReason)
+        self.gewaehlt.emit(self.kennung)
         super().mousePressEvent(event)
 
+    def keyPressEvent(self, event) -> None:
+        if event.key() in (Qt.Key.Key_Space, Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.gewaehlt.emit(self.kennung)
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
-class WelcomePage(QWizardPage):
+    # -- Zeichnen -------------------------------------------------------------
+    def paintEvent(self, event) -> None:
+        werte = tokens()
+        p = werte.palette
+        maler = QPainter(self)
+        maler.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        flaeche = self.rect().adjusted(1, 1, -1, -1)
+
+        maler.setPen(Qt.PenStyle.NoPen)
+        grund = p.surface_alt if self._hover > 0.5 and not self._aktiv else p.surface
+        maler.setBrush(QColor(grund))
+        maler.drawRoundedRect(flaeche, werte.radius.md, werte.radius.md)
+        if self._fuellung > 0.01:
+            maler.setBrush(qfarbe(p.accent, 0.16 * self._fuellung))
+            maler.drawRoundedRect(flaeche, werte.radius.md, werte.radius.md)
+
+        randfarbe = QColor(p.accent) if self._fuellung > 0.5 else QColor(p.border)
+        maler.setBrush(Qt.BrushStyle.NoBrush)
+        maler.setPen(QPen(randfarbe, 1.0 + self._fuellung))
+        maler.drawRoundedRect(flaeche, werte.radius.md, werte.radius.md)
+
+        if self.hasFocus():
+            maler.setPen(QPen(QColor(p.accent), 2.0))
+            maler.drawRoundedRect(
+                flaeche.adjusted(-1, -1, 1, 1), werte.radius.md + 1, werte.radius.md + 1
+            )
+
+        # Auswahlpunkt
+        mitte_y = werte.space.md + 9
+        punkt_x = werte.space.md + 8
+        maler.setBrush(Qt.BrushStyle.NoBrush)
+        maler.setPen(QPen(QColor(p.accent if self._fuellung > 0.5 else p.border_strong), 1.5))
+        maler.drawEllipse(int(punkt_x - 7), int(mitte_y - 7), 14, 14)
+        if self._fuellung > 0.01:
+            maler.setPen(Qt.PenStyle.NoPen)
+            maler.setBrush(QColor(p.accent))
+            radius = 4.5 * self._fuellung
+            maler.drawEllipse(
+                int(punkt_x - radius), int(mitte_y - radius), int(radius * 2), int(radius * 2)
+            )
+
+        links = punkt_x + 16
+        maler.setFont(schrift(BODY, fett=True))
+        maler.setPen(QColor(p.text))
+        maler.drawText(
+            int(links),
+            int(mitte_y + 5),
+            self.titel,
+        )
+        if self.text:
+            maler.setFont(schrift(CAPTION))
+            maler.setPen(QColor(p.text_muted))
+            maler.drawText(int(links), int(mitte_y + 24), self.text)
+        maler.end()
+
+
+class WelcomePage(PageBase):
     """Vorlage waehlen, Profil laden oder von vorn beginnen."""
 
     profileLoaded = Signal()
@@ -88,161 +183,192 @@ class WelcomePage(QWizardPage):
         store: SelectionStore,
         profiles: ProfileService,
         environment: Environment | None = None,
-        parent: QWidget | None = None,
     ) -> None:
-        super().__init__(parent)
-        self.store = store
+        super().__init__(None, store)
         self.profiles = profiles
         self.environment = environment
         self._loaded_from: Path | None = None
-        # Welche Auswahl bereits umgesetzt wurde. Ohne diesen Merker
-        # loeschte ein Blaettern zurueck auf die Startseite und wieder
-        # vor die gesamte Zusammenstellung -- validatePage lief erneut
-        # und rief store.reset().
-        self._angewendet: str | None = None
+        self._angewendet: object = None
+        self._karten: dict[str, _Auswahlkarte] = {}
+        self._vorlagen: dict[str, ProfileInfo] = {}
+        self._gewaehlt = "leer"
 
-        self.setTitle("Willkommen")
-        self.setSubTitle(
-            "Womit soll begonnen werden? Alles laesst sich danach noch aendern."
-        )
+        werte = tokens()
+        inneres = QWidget()
+        self._liste = QVBoxLayout(inneres)
+        self._liste.setContentsMargins(0, 0, werte.space.sm, 0)
+        self._liste.setSpacing(werte.space.sm)
 
-        self._group = QButtonGroup(self)
-        self._group.setExclusive(True)
-        self._choices: list[tuple[_Choice, ProfileInfo | None]] = []
+        self._vorlagen_aufbauen()
+        self._feste_auswahl()
+        self._liste.addStretch(1)
 
-        root = QVBoxLayout(self)
-        root.setSpacing(theme.SPACE_MD)
+        rolle = QScrollArea()
+        rolle.setWidgetResizable(True)
+        rolle.setFrameShape(QScrollArea.Shape.NoFrame)
+        rolle.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        rolle.setWidget(inneres)
+        self._root.addWidget(rolle, 1)
 
-        inner = QWidget()
-        self._list = QVBoxLayout(inner)
-        self._list.setContentsMargins(0, 0, 0, 0)
-        self._list.setSpacing(theme.SPACE_SM)
+        self.historie = self._historie_zeigen()
+        if self.historie is not None:
+            self._root.addWidget(self.historie)
 
-        self._add_templates()
-        self._add_fixed_choices()
-        self._list.addStretch(1)
+        self.status = HintLabel(self._umgebungstext())
+        self.status.setVisible(bool(self.status.text()))
+        self._root.addWidget(self.status)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        scroll.setWidget(inner)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        root.addWidget(scroll, 1)
-
-        self.status = HintLabel(self._environment_text())
-        root.addWidget(self.status)
+        self._setze_gewaehlt("leer")
 
     # -- Aufbau ---------------------------------------------------------------
-    def _add_templates(self) -> None:
+    def _vorlagen_aufbauen(self) -> None:
         vorlagen = [info for info in self.profiles.list() if info.builtin]
         if not vorlagen:
             return
-        ueberschrift = HeadlineLabel("Mit einer Vorlage beginnen", level=2)
-        self._list.addWidget(ueberschrift)
-
+        self._liste.addWidget(HeadlineLabel("Mit einer Vorlage beginnen", level=2))
         for info in vorlagen:
-            karte = _Choice(info.display_name, info.description)
-            self._group.addButton(karte.button)
-            self._list.addWidget(karte)
-            self._choices.append((karte, info))
-            karte.button.toggled.connect(self._changed)
+            kennung = f"vorlage:{info.path}"
+            self._vorlagen[kennung] = info
+            self._karte(kennung, info.display_name, info.description)
 
-    def _add_fixed_choices(self) -> None:
-        self._list.addSpacing(theme.SPACE_SM)
-        self._list.addWidget(HeadlineLabel("Oder", level=2))
-
-        self._eigenes = _Choice(
+    def _feste_auswahl(self) -> None:
+        werte = tokens()
+        self._liste.addSpacing(werte.space.sm)
+        self._liste.addWidget(HeadlineLabel("Oder", level=2))
+        self._karte(
+            "datei",
             "Eigenes Profil laden ...",
             "Eine gespeicherte Konfiguration von der Festplatte oeffnen.",
         )
-        self._leer = _Choice(
+        self._karte(
+            "leer",
             "Von vorn beginnen",
             "Alles selbst zusammenstellen, ohne Vorgaben.",
         )
-        for karte in (self._eigenes, self._leer):
-            self._group.addButton(karte.button)
-            self._list.addWidget(karte)
-            self._choices.append((karte, None))
-            karte.button.toggled.connect(self._changed)
 
-        self._leer.button.setChecked(True)
+    def _karte(self, kennung: str, titel: str, text: str) -> None:
+        karte = _Auswahlkarte(kennung, titel, text)
+        karte.gewaehlt.connect(self._setze_gewaehlt)
+        self._karten[kennung] = karte
+        self._liste.addWidget(karte)
 
-    def _environment_text(self) -> str:
+    def _historie_zeigen(self) -> QLabel | None:
+        """Was auf diesem Rechner schon gebaut wurde.
+
+        Ein Bau dauert eine halbe Stunde und erzeugt eine mehrere Gigabyte
+        grosse Datei. Wer das zweimal im Monat macht, weiss nach dem dritten
+        Mal nicht mehr, welche ISO noch auf der Platte liegt und wozu sie
+        gehoerte. Drei Zeilen an dieser Stelle beantworten das.
+        """
+        from ...core import history
+
+        eintraege = history.lies(3)
+        if not eintraege:
+            return None
+        zeilen = []
+        for eintrag in eintraege:
+            rest = "" if eintrag.existiert_noch else "  (Datei geloescht)"
+            zeilen.append(
+                f"{eintrag.zeitpunkt}   {eintrag.iso_name}   "
+                f"{eintrag.groesse_mb} MB{rest}"
+            )
+        label = QLabel("Zuletzt gebaut:\n" + "\n".join(zeilen))
+        label.setFont(schrift(CAPTION))
+        label.setProperty("rolle", "gedaempft")
+        label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        return label
+
+    def _umgebungstext(self) -> str:
         if self.environment is None or self.environment.can_build:
             return ""
-        # Frueher eine modale Infobox beim Start. Hier ist dieselbe Auskunft,
-        # ohne dass sie sich vor die Anwendung schiebt.
+        # Frueher eine modale Infobox beim Start. Dieselbe Auskunft, ohne dass
+        # sie sich vor die Anwendung schiebt.
         return self.environment.summary()
 
-    # -- Ereignisse -----------------------------------------------------------
-    def _changed(self, checked: bool) -> None:
-        if checked:
-            self.completeChanged.emit()
+    # -- Auswahl --------------------------------------------------------------
+    def _setze_gewaehlt(self, kennung: str) -> None:
+        self._gewaehlt = kennung
+        for schluessel, karte in self._karten.items():
+            karte.setze_aktiv(schluessel == kennung)
+        self.completeChanged.emit()
 
-    def isComplete(self) -> bool:
-        return self._group.checkedButton() is not None
+    def gewaehlt(self) -> str:
+        return self._gewaehlt
 
-    def selected_profile(self) -> ProfileInfo | None:
-        """Die gewaehlte Vorlage, falls eine gewaehlt wurde."""
-        for karte, info in self._choices:
-            if karte.button.isChecked():
-                return info
-        return None
+    def is_complete(self) -> bool:
+        return bool(self._gewaehlt)
 
-    def wants_file_dialog(self) -> bool:
-        return self._eigenes.button.isChecked()
+    def titel(self) -> str:
+        return "Willkommen"
 
-    def wants_empty(self) -> bool:
-        return self._leer.button.isChecked()
+    def untertitel(self) -> str:
+        return "Womit soll begonnen werden? Alles laesst sich danach noch aendern."
 
     # -- Uebergang ------------------------------------------------------------
-    def validatePage(self) -> bool:
-        """Setzt die Auswahl um, bevor weitergegangen wird.
-
-        Erst hier und nicht beim Anklicken: wer eine Vorlage nur ansieht und
-        sich anders entscheidet, soll den Store nicht schon veraendert haben.
-        """
-        if self.wants_empty():
-            if self._schon_angewendet("leer"):
-                return True
+    def leave(self) -> bool:
+        """Setzt die Auswahl um, bevor weitergegangen wird."""
+        if self._gewaehlt == "leer":
+            if self._angewendet == ("leer",):
+                return True          # nichts hat sich geaendert
+            if not self._darf_verwerfen():
+                return False
             self.store.reset()
-            self._angewendet = "leer"
+            self._angewendet = ("leer",)
             return True
 
-        if self.wants_file_dialog():
+        if self._gewaehlt == "datei":
+            # Die mitgelieferten Vorlagen stehen als Karten direkt
+            # darueber -- wer hier klickt, sucht seine eigene Datei.
+            start = self._startordner()
             pfad, _filter = QFileDialog.getOpenFileName(
-                self, "Profil laden", str(Path.home()), "Profile (*.yaml *.yml)"
+                self, "Profil laden", start, "Profile (*.yaml *.yml)"
             )
             if not pfad:
                 return False          # abgebrochen -- auf der Seite bleiben
-            if self._load(Path(pfad)):
-                self._angewendet = f"datei:{pfad}"
-                return True
-            return False
+            if not self._laden(Path(pfad)):
+                return False
+            self._angewendet = ("datei", pfad)
+            return True
 
-        info = self.selected_profile()
+        info = self._vorlagen.get(self._gewaehlt)
         if info is None:
             return False
-        if self._schon_angewendet(f"vorlage:{info.path}"):
-            return True
-        if self._load(info.path):
-            self._angewendet = f"vorlage:{info.path}"
-            return True
-        return False
+        if self._angewendet == ("vorlage", str(info.path)):
+            return True          # dieselbe Vorlage, nichts zu tun
+        if not self._darf_verwerfen():
+            return False
+        if not self._laden(info.path):
+            return False
+        self._angewendet = ("vorlage", str(info.path))
+        return True
 
-    def _schon_angewendet(self, schluessel: str) -> bool:
-        """Ob dieselbe Auswahl schon einmal umgesetzt wurde.
+    def _startordner(self) -> str:
+        """Wo der Dateidialog aufgeht."""
+        from ...core.paths import user_profiles_dir
 
-        Blaettert der Benutzer zurueck auf die Startseite und wieder vor, ist
-        das ein reiner Seitenwechsel und darf nichts verwerfen. Eine ANDERE
-        Auswahl wird weiterhin umgesetzt -- dann will er das ja.
+        eigene = user_profiles_dir()
+        if eigene.is_dir():
+            return str(eigene)
+        return str(Path.home())
 
-        Die Dateiauswahl ist ausgenommen: dort erscheint ohnehin ein Dialog,
-        und wer denselben Pfad noch einmal auswaehlt, meint das auch so.
+    def _darf_verwerfen(self) -> bool:
+        """Fragt nach, bevor eine begonnene Zusammenstellung verworfen wird.
+
+        Beim ersten Durchgang gibt es nichts zu verlieren; dann erscheint auch
+        keine Frage.
         """
-        return self._angewendet == schluessel
+        if self._angewendet is None:
+            return True
+        antwort = QMessageBox.question(
+            self,
+            "Zusammenstellung verwerfen?",
+            "Die bisherige Auswahl wird dabei zurueckgesetzt.\n\nFortfahren?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return antwort == QMessageBox.StandardButton.Yes
 
-    def _load(self, pfad: Path) -> bool:
+    def _laden(self, pfad: Path) -> bool:
         try:
             ergebnis = self.profiles.load(pfad)
         except ProfileError as exc:
@@ -251,7 +377,7 @@ class WelcomePage(QWizardPage):
 
         if ergebnis.issues:
             details = "\n".join(
-                f"• {issue.message}"
+                f"- {issue.message}"
                 + (f"\n   ({issue.action_taken})" if issue.action_taken else "")
                 for issue in ergebnis.issues
             )
@@ -264,14 +390,27 @@ class WelcomePage(QWizardPage):
         self.store.replace_config(ergebnis.config)
         self._loaded_from = pfad
         if ergebnis.secret_fields:
+            from ..actions import passwort_hinweis
+
             QMessageBox.information(
                 self,
                 "Passwort erneut eingeben",
-                "Profile enthalten keine Passwoerter. Bitte das Passwort im "
-                "Schritt 'Benutzerkonto' neu eingeben.",
+                passwort_hinweis(self.store.catalog, ergebnis.secret_fields),
             )
         self.profileLoaded.emit()
         return True
 
     def loaded_from(self) -> Path | None:
         return self._loaded_from
+
+    def markiere_extern_geladen(self) -> None:
+        """Nach einem Profilwechsel ueber die Kopfzeile.
+
+        Ohne diesen Vermerk haette ein spaeterer Besuch der Startseite das
+        geladene Profil beim Weitergehen wieder zurueckgesetzt -- "Von vorn
+        beginnen" steht ja weiter vorgehakt.
+        """
+        self._angewendet = ("extern", object())
+
+
+__all__ = ["WelcomePage"]

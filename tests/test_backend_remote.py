@@ -7,9 +7,6 @@ Zwischenspeicher, beschaedigte Datenbank.
 
 from __future__ import annotations
 
-import socket
-from datetime import datetime, timedelta, timezone
-
 import pytest
 
 from archcustomiser.core.packages.backend import PackageConfig, RefreshPolicy

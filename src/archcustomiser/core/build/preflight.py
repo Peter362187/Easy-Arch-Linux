@@ -15,9 +15,9 @@ import logging
 import os
 import shutil
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Sequence
 
 from ..environment import CONDITIONAL_TOOLS, Environment, detect_environment
 from .errors import PreflightError
@@ -470,15 +470,62 @@ def run_wsl_preflight(
             str(out_dir) if writable else f"Keine Schreibrechte in {probe}.",
         )
     )
+
+    # Es muss aber auch aus der Verteilung heraus erreichbar sein: die fertige
+    # ISO wird mit 'cp' innerhalb von Linux dorthin kopiert. Auf einem
+    # Netzlaufwerk oder einem UNC-Pfad scheitert 'wslpath' -- frueher erst in
+    # fetch_iso, also nach zwanzig bis sechzig Minuten Bauzeit. Die ISO lag
+    # dann nur noch in der virtuellen Platte.
+    if writable:
+        report.checks.append(_wsl_ausgabe_erreichbar(wsl_target, out_dir))
+
     return report
+
+
+def _wsl_ausgabe_erreichbar(wsl_target, out_dir: Path) -> Check:
+    """Prueft, ob die Verteilung das Ausgabeverzeichnis sieht."""
+    from .wsl import WslError
+
+    try:
+        linux_pfad = wsl_target.to_linux_path(out_dir)
+    except WslError as exc:
+        return Check(
+            "Ausgabeverzeichnis in Linux",
+            False,
+            f"{out_dir} ist aus der Linux-Verteilung nicht erreichbar. Das "
+            f"trifft Netzlaufwerke und UNC-Pfade. Bitte ein Verzeichnis auf "
+            f"einem lokalen Laufwerk waehlen. ({exc.user_message})",
+        )
+    except Exception:
+        log.debug("Erreichbarkeit des Ausgabeverzeichnisses unklar", exc_info=True)
+        return Check(
+            "Ausgabeverzeichnis in Linux",
+            True,
+            "nicht pruefbar -- der Bau versucht es trotzdem",
+            fatal=False,
+        )
+
+    ergebnis = wsl_target.run(["test", "-d", "--", linux_pfad])
+    if not ergebnis.ok:
+        # 'test -d --' kennt nicht jede Shell; ohne -- noch einmal versuchen.
+        ergebnis = wsl_target.run(["test", "-d", linux_pfad])
+    if not ergebnis.ok:
+        return Check(
+            "Ausgabeverzeichnis in Linux",
+            False,
+            f"{out_dir} liegt fuer die Verteilung unter {linux_pfad}, dort ist "
+            f"es aber nicht auffindbar. Meist ist das Laufwerk nicht "
+            f"eingehaengt (wsl.conf, automount).",
+        )
+    return Check("Ausgabeverzeichnis in Linux", True, linux_pfad, fatal=False)
 
 
 def _rootless_remedy(engine: str) -> str:
     """Was zu tun ist, wenn der Container nicht einhaengen darf.
 
     Fast immer ist die Ursache dieselbe: die Engine laeuft rootless. Das ist
-    die Vorgabe von podman fuer normale Benutzer und auf den meisten Systemen
-    genau richtig -- nur nicht fuer pacstrap, das echte Mounts braucht.
+    podmans Vorgabe fuer normale Benutzer und auf den meisten Systemen genau
+    richtig -- nur nicht fuer pacstrap, das echte Einhaengungen braucht.
     """
     if engine == "podman":
         hilfe = (
@@ -551,15 +598,15 @@ def run_container_preflight(
     )
 
     # -- Rechte ---------------------------------------------------------------
-    # Bis zum 07.09.2026 stand hier eine reine Zusicherung: "der Container
-    # laeuft privilegiert". Ob das auf DIESEM System auch reicht, hat niemand
-    # nachgesehen -- und meistens reicht es nicht. Auf einem normalen Ubuntu
-    # laeuft podman als normaler Benutzer rootless, und dort gibt --privileged
-    # alle Faehigkeiten nur innerhalb des Benutzer-Namensraums. Der Bau lief
-    # dann bis pacstrap und starb dort am ersten Mount.
-    #
-    # Die Probe kostet zwei Sekunden, braucht aber das Abbild. Fehlt es noch,
-    # wird nichts behauptet -- die Vorabpruefung darf keine 800 MB laden.
+    # Ehrlich benennen statt verstecken: der Container laeuft privilegiert, weil
+    # pacstrap acht Dateisysteme einhaengt. Rootless scheitert an devtmpfs, das
+    # im Kernel kein FS_USERNS_MOUNT-Flag hat.
+    # Liegt das Abbild vor, wird nicht gefragt, sondern gemessen: ein Container
+    # haengt devtmpfs ein und wieder aus, zwei Sekunden. Das beantwortet die
+    # Frage abschliessend, waehrend "laeuft die Engine rootless?" nur ein
+    # Anzeichen ist -- und ein Fehlschlag kaeme sonst erst nach Minuten mitten
+    # in pacstrap, mit einer Meldung, die niemand deuten kann.
+    rootless = bool(getattr(container, "rootless", False))
     if vorhanden:
         try:
             darf_einhaengen = container.can_mount_privileged()
@@ -570,26 +617,37 @@ def run_container_preflight(
                 Check(
                     "Rechte",
                     True,
-                    "Der Container darf einhaengen (nachgeprueft). Das braucht "
-                    "pacstrap, um das System im Abbild aufzubauen; Arch baut "
-                    "seine eigenen ISOs genauso.",
+                    "Der Container darf einhaengen (nachgeprueft mit devtmpfs). "
+                    "Genau das braucht pacstrap, um das System im Abbild "
+                    "aufzubauen; Arch baut seine eigenen ISOs genauso.",
                 )
             )
         else:
-            report.checks.append(
-                Check(
-                    "Rechte",
-                    False,
-                    _rootless_remedy(container.engine),
-                )
+            report.checks.append(Check("Rechte", False, _rootless_remedy(container.engine)))
+    elif rootless:
+        # Ohne Abbild bleibt nur das Anzeichen -- und eine Warnung, keine
+        # Sperre: die Vorabpruefung darf kein Abbild herunterladen, und ob die
+        # Kernelgrenze im Einzelfall doch traegt, entscheidet der Versuch.
+        report.checks.append(
+            Check(
+                "Rechte",
+                False,
+                "Die Container-Engine laeuft im rootless-Modus. pacstrap haengt "
+                "acht Dateisysteme in den Zielbaum ein, darunter devtmpfs -- "
+                "und das laesst sich in einem User-Namespace grundsaetzlich "
+                "nicht einhaengen. Der Bau kann daran scheitern. Abhilfe: die "
+                "Engine als root ansprechen (podman: 'sudo podman', docker: "
+                "Dienst im Systemkontext).",
+                fatal=False,
             )
+        )
     else:
         report.checks.append(
             Check(
                 "Rechte",
                 True,
                 "Der Container laeuft privilegiert (--privileged). Ob das hier "
-                "ausreicht, laesst sich erst mit dem Abbild pruefen.",
+                "ausreicht, laesst sich erst mit dem Abbild nachpruefen.",
                 fatal=False,
             )
         )

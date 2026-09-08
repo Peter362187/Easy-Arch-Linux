@@ -36,8 +36,10 @@ import re
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Sequence
+
+from ..subprocess_util import windows_flags
 
 from .errors import BuildError
 
@@ -129,7 +131,24 @@ def find_engine() -> str | None:
     return None
 
 
-def _run(argv: Sequence[str], *, timeout: float = DEFAULT_TIMEOUT) -> ContainerResult:
+def _run(
+    argv: Sequence[str],
+    *,
+    timeout: float = DEFAULT_TIMEOUT,
+    eingabe: str | None = None,
+) -> ContainerResult:
+    """Fuehrt einen Engine-Aufruf aus.
+
+    ``eingabe`` geht auf die Standardeingabe des Kindprozesses. Genau das
+    fehlte beim Bauen des Abbilds: der Aufruf lautete ``build --file -``, aber
+    das Containerfile wurde nie uebergeben -- die Engine las stattdessen die
+    Standardeingabe der Anwendung. Aus einem Desktop-Start ist die leer (die
+    Engine meldet dann "no FROM statement"), aus einem Terminal blockiert sie
+    bis zum Zeitlimit von einer halben Stunde.
+
+    Ohne ``eingabe`` wird die Standardeingabe ausdruecklich geschlossen. Eine
+    Engine, die unerwartet nachfragt, bekommt so sofort EOF statt zu haengen.
+    """
     try:
         fertig = subprocess.run(
             [str(item) for item in argv],
@@ -140,7 +159,9 @@ def _run(argv: Sequence[str], *, timeout: float = DEFAULT_TIMEOUT) -> ContainerR
             timeout=timeout,
             check=False,
             shell=False,
-            creationflags=KEIN_FENSTER,
+            input=eingabe,
+            stdin=None if eingabe is not None else subprocess.DEVNULL,
+            **windows_flags(),
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise ContainerError(
@@ -279,6 +300,9 @@ class ContainerTarget:
             )
         self.engine = gefunden
         self.image = image
+        # Von detect() gesetzt; die Vorabpruefung warnt danach. Vorgabe False:
+        # ohne Erkennung wird nichts behauptet.
+        self.rootless = False
         # Einhaengepunkt fuer die Tests -- der Ablauf laesst sich damit
         # vollstaendig pruefen, ohne dass ein Container startet.
         self._runner = runner or _run
@@ -290,27 +314,27 @@ class ContainerTarget:
     def build_image(self, on_line=None) -> None:
         """Baut das Abbild einmalig aus dem offiziellen archlinux-Abbild.
 
-        Frueher stand hier ``--file -``, also "Containerfile von stdin" -- nur
-        wurde ``CONTAINERFILE`` nirgends uebergeben. ``_run`` kennt kein
-        ``input=``, also erbte die Engine das stdin des Programms: aus einem
-        Terminal gestartet wartete sie bis zum Zeitlimit von 1800 Sekunden, aus
-        der Oberflaeche gestartet las sie sofort EOF und brach mit "no FROM
-        statement" ab. Der Container-Weg konnte so nie funktionieren.
+        Ueber stdin statt ueber eine Datei auf der Platte: dann gibt es keinen
+        Bauordner, der aufgeraeumt werden muesste, und nichts, was zwischen
+        zwei Laeufen veralten kann.
 
-        Jetzt geht es ueber ein Wegwerfverzeichnis. Das raeumt sich selbst auf
-        -- der urspruengliche Einwand gegen eine Datei auf der Platte bleibt
-        also erfuellt -- und nebenbei ist der Bauzusammenhang nicht mehr das
-        Arbeitsverzeichnis des Programms, das sonst vollstaendig an die Engine
-        geschickt wuerde.
+        Zwei Dinge, die vorher fehlten und den Weg unbenutzbar machten:
+
+        * Das Containerfile wurde nie uebergeben. ``--file -`` liest die
+          Standardeingabe, und die kam vom aufrufenden Programm.
+        * Der Bau-Kontext war ``.``, also das Arbeitsverzeichnis der
+          Anwendung. podman uebertraegt es, docker schickt es vollstaendig an
+          seinen Daemon -- bei ``$HOME`` als Verzeichnis sind das Gigabyte
+          fremder Dateien. Der Kontext ist deshalb ein leeres, sofort wieder
+          entferntes Verzeichnis; das Abbild braucht keine einzige Datei
+          daraus.
         """
         log.info("Container-Abbild %s wird gebaut", self.image)
-        with tempfile.TemporaryDirectory(prefix="archcustomiser-abbild-") as ordner:
-            datei = os.path.join(ordner, "Containerfile")
-            with open(datei, "w", encoding="utf-8", newline="\n") as ziel:
-                ziel.write(CONTAINERFILE)
+        with tempfile.TemporaryDirectory(prefix="archcustomiser-kontext-") as kontext:
             ergebnis = self._runner(
-                [self.engine, "build", "--tag", self.image, "--file", datei, ordner],
+                [self.engine, "build", "--tag", self.image, "--file", "-", kontext],
                 timeout=IMAGE_BUILD_TIMEOUT,
+                eingabe=CONTAINERFILE,
             )
         if not ergebnis.ok:
             raise ContainerError(

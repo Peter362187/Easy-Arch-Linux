@@ -14,13 +14,15 @@ sichtbar stocken.
 from __future__ import annotations
 
 import logging
+import threading
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QThread, QTimer, Signal
 
 from ..core.archiso.errors import ProfileError
-from ..core.build import BuildController, BuildOutcome, Step
+from ..core.build import BuildController
 from ..core.build.errors import BuildCancelled, BuildError
+from ..core.build.verify import sha256_von
 from ..core.catalog import Catalog
 from ..core.config import BuildConfig
 from ..core.resolver import Resolution
@@ -38,7 +40,7 @@ class _BuildThread(QThread):
     stepChanged = Signal(object, str)        # (Step, Beschriftung)
     progressChanged = Signal(float, str, str)
     lineReceived = Signal(str)
-    finishedOk = Signal(object)              # BuildOutcome
+    finishedOk = Signal(object, str)         # (BuildOutcome, SHA-256)
     failed = Signal(object)                  # Exception
     cancelledByUser = Signal()
 
@@ -55,6 +57,8 @@ class _BuildThread(QThread):
         self.work_dir = work_dir
         self.out_dir = out_dir
         self.keep_work_dir = keep_work_dir
+        # Eigener Merker: siehe _pruefsumme.
+        self._hash_abbruch = threading.Event()
 
     def run(self) -> None:
         try:
@@ -66,7 +70,8 @@ class _BuildThread(QThread):
                 on_progress=lambda f, label, detail: self.progressChanged.emit(f, label, detail),
                 on_line=self.lineReceived.emit,
             )
-            self.finishedOk.emit(outcome)
+            pruefsumme = self._pruefsumme(outcome)
+            self.finishedOk.emit(outcome, pruefsumme)
         except BuildCancelled:
             self.cancelledByUser.emit()
         except (BuildError, ProfileError) as exc:
@@ -75,6 +80,31 @@ class _BuildThread(QThread):
         except Exception as exc:      # darf die Anwendung nie mitreissen
             log.exception("Unerwarteter Fehler im Build")
             self.failed.emit(exc)
+
+    def gib_pruefsumme_auf(self) -> None:
+        """Beim Beenden: die Rechnung darf dann abbrechen."""
+        self._hash_abbruch.set()
+
+    def _pruefsumme(self, outcome) -> str:
+        """SHA-256 der fertigen ISO -- hier im Bau-Faden, nicht in der Oberflaeche.
+
+        Eine ISO ist zwei bis vier Gigabyte gross. Sie im Oberflaechenfaden zu
+        lesen legt das Fenster fuer mehrere Sekunden still, ausgerechnet in dem
+        Moment, in dem der Benutzer nach einer halben Stunde das Ergebnis sehen
+        will.
+
+        Die Summe ist kein Beiwerk: wer die ISO auf einen USB-Stick schreibt,
+        braucht sie, um einen stillen Uebertragungsfehler zu bemerken.
+
+        Der Abbruch haengt an einem **eigenen** Merker, nicht am Abbruchmerker
+        des Controllers. Sonst warf ein Klick auf "Abbrechen", der Sekunden zu
+        spaet kam, die Pruefsumme einer laengst fertigen ISO weg -- und in der
+        Ergebnisansicht stand "nicht berechnet".
+        """
+        pfad = getattr(outcome, "iso_path", None)
+        if pfad is None or not pfad.is_file():
+            return ""
+        return sha256_von(pfad, abbruch=self._hash_abbruch.is_set)
 
 
 class _CancelThread(QThread):
@@ -95,11 +125,19 @@ class _CancelThread(QThread):
         super().__init__(parent)
         self.controller = controller
 
+    failed = Signal(object)
+
     def run(self) -> None:
         try:
             self.controller.cancel()
-        except Exception:        # ein Abbruch darf nie seinerseits scheitern
+        except Exception as exc:  # ein Abbruch darf nie seinerseits scheitern
             log.exception("Abbruch fehlgeschlagen")
+            # Aber er darf auch nicht lautlos scheitern. Genau dieser Fall ist
+            # vorgesehen: das lokale Ziel wirft, wenn terminate() an EPERM
+            # scheitert und pkexec fehlt. Die Oberflaeche stand dann dauerhaft
+            # auf "Wird abgebrochen ..." mit gesperrtem Knopf, waehrend der Bau
+            # weiterlief.
+            self.failed.emit(exc)
 
 
 class BuildJob(QObject):
@@ -108,9 +146,10 @@ class BuildJob(QObject):
     stepChanged = Signal(object, str)
     progressChanged = Signal(float, str, str)
     linesReceived = Signal(list)             # gebuendelt, nicht einzeln
-    finished = Signal(object)
+    finished = Signal(object, str)           # (BuildOutcome, SHA-256)
     failed = Signal(object)
     cancelled = Signal()
+    cancelFailed = Signal(object)
 
     def __init__(
         self,
@@ -136,6 +175,21 @@ class BuildJob(QObject):
     def running(self) -> bool:
         return self._thread is not None and self._thread.isRunning()
 
+    @property
+    def busy(self) -> bool:
+        """Ob noch irgendein Faden dieses Auftrags arbeitet.
+
+        Der Abbruch-Faden laeuft weiter, nachdem der Bau-Faden schon
+        "abgebrochen" gemeldet hat: beim WSL-Ziel sind das mehrere
+        wsl.exe-Aufrufe mit je 30 s Zeitlimit. 'running' allein reicht
+        deshalb nicht, um zu entscheiden, ob das Programm beendet werden
+        darf.
+        """
+        if self.running:
+            return True
+        thread = self._cancel_thread
+        return thread is not None and thread.isRunning()
+
     def preflight(self, work_dir: Path, out_dir: Path):
         return self.controller.preflight(work_dir, out_dir)
 
@@ -149,6 +203,12 @@ class BuildJob(QObject):
         thread.finishedOk.connect(self._on_finished)
         thread.failed.connect(self._on_failed)
         thread.cancelledByUser.connect(self._on_cancelled)
+        # Erst wenn der QThread wirklich zu Ende ist, gilt der Auftrag als
+        # beendet. Frueher setzte _finish() den Verweis schon beim
+        # Ergebnis-Signal auf None: 'running' war danach False, wait()
+        # wartete auf nichts, und beim Beenden zerstoerte Qt einen noch
+        # laufenden Thread ("Destroyed while thread is still running").
+        thread.finished.connect(self._on_thread_finished)
         self._thread = thread
         self._flush.start()
         thread.start()
@@ -169,8 +229,23 @@ class BuildJob(QObject):
             return
         self._cancel_requested = True
         thread = _CancelThread(self.controller, self)
+        thread.failed.connect(self._on_cancel_failed)
+        thread.finished.connect(self._on_cancel_thread_finished)
         self._cancel_thread = thread
         thread.start()
+
+    def _on_cancel_failed(self, fehler: object) -> None:
+        # Ein zweiter Versuch muss moeglich sein -- der Merker im Controller
+        # bleibt allerdings gesetzt, der Bau endet also so oder so als
+        # abgebrochen.
+        self._cancel_requested = False
+        self.cancelFailed.emit(fehler)
+
+    def _on_cancel_thread_finished(self) -> None:
+        thread = self._cancel_thread
+        self._cancel_thread = None
+        if thread is not None:
+            thread.deleteLater()
 
     def wait(self, milliseconds: int = 30000) -> bool:
         fertig = True
@@ -198,11 +273,17 @@ class BuildJob(QObject):
     def _finish(self) -> None:
         self._flush.stop()
         self._emit_pending()
-        self._thread = None
 
-    def _on_finished(self, outcome: object) -> None:
+    def _on_thread_finished(self) -> None:
+        """Der Bau-Faden ist beendet -- erst jetzt darf der Verweis weg."""
+        thread = self._thread
+        self._thread = None
+        if thread is not None:
+            thread.deleteLater()
+
+    def _on_finished(self, outcome: object, sha256: str) -> None:
         self._finish()
-        self.finished.emit(outcome)
+        self.finished.emit(outcome, sha256)
 
     def _on_failed(self, error: object) -> None:
         self._finish()

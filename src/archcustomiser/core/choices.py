@@ -15,8 +15,8 @@ import functools
 import logging
 import shutil
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 log = logging.getLogger(__name__)
 

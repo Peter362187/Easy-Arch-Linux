@@ -12,8 +12,9 @@ keinen einzigen Netzzugriff mehr.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
+from datetime import UTC
 from pathlib import Path
-from typing import Sequence
 
 from .backend import (
     CancelCallback,
@@ -197,7 +198,16 @@ class RemoteIndexBackend:
                 raise failures[0]
             raise NetworkUnavailable("keine Paketdaten verfuegbar")
 
-        meta = IndexMetadata(backend=self.name, arch=self.config.arch, repos=tuple(metas))
+        geladen = {name for name, _ in repo_packages}
+        fehlend = tuple(repo for repo in self.config.repos if repo not in geladen)
+        if fehlend:
+            log.warning("Teilindex: %s fehlen", ", ".join(fehlend))
+        meta = IndexMetadata(
+            backend=self.name,
+            arch=self.config.arch,
+            repos=tuple(metas),
+            missing_repos=fehlend,
+        )
         index = build_index(repo_packages, meta)
         if progress is not None:
             progress("fertig", 1.0)
@@ -229,11 +239,11 @@ class RemoteIndexBackend:
             raise
 
     def _age(self, entry: CacheEntry) -> float | None:
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         if entry.fetched_at is None:
             return None
-        return (datetime.now(timezone.utc) - entry.fetched_at).total_seconds()
+        return (datetime.now(UTC) - entry.fetched_at).total_seconds()
 
     def _download(self, repo: str, cached: CacheEntry | None) -> tuple[CacheEntry, bytes]:
         headers: dict[str, str] = {}

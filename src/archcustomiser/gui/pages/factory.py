@@ -7,13 +7,12 @@ bestimmt ueber ``page_type``, welcher davon zum Zug kommt.
 from __future__ import annotations
 
 import logging
-from typing import Callable
-
-from PySide6.QtWidgets import QWizardPage
+from collections.abc import Callable
 
 from ...core.catalog import Category, PageType
 from ..packages_worker import PackageController
 from ..store import SelectionStore
+from .base import PageBase
 from .form import CatalogFormPage
 from .free_packages import FreePackagesPage
 from .selection import CatalogSelectionPage
@@ -21,7 +20,7 @@ from .summary import SummaryPage
 
 log = logging.getLogger(__name__)
 
-PageBuilder = Callable[[Category, SelectionStore, PackageController], QWizardPage]
+PageBuilder = Callable[[Category, SelectionStore, PackageController], PageBase]
 
 
 class PageFactory:
@@ -35,9 +34,12 @@ class PageFactory:
             PageType.SUMMARY: lambda c, s, p: SummaryPage(c, s, p),
         }
 
-    def create(self, category: Category) -> QWizardPage | None:
+    def create(self, category: Category) -> PageBase | None:
         builder = self._builders.get(category.page_type)
         if builder is None:
             log.error("Kein Seitentyp fuer %r registriert", category.page_type)
             return None
         return builder(category, self.store, self.controller)
+
+
+__all__ = ["PageFactory"]

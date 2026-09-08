@@ -7,8 +7,6 @@ allem die beiden Fallstricke ab, an denen ein naiver Parser scheitert.
 
 from __future__ import annotations
 
-import pytest
-
 from archcustomiser.core.build.progress import (
     MESSAGE,
     STAGES,
