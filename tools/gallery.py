@@ -101,10 +101,6 @@ def _fenster(dunkel: bool, tmp: Path):
 
     katalog = load_catalog()
     store = SelectionStore(katalog)
-    # Eine gefuellte Auswahl zeigt mehr als ein leeres Programm.
-    store.toggle("desktop.kde", True)
-    store.toggle("apps.firefox", True)
-    store.toggle("apps.git", True)
 
     # Kein Netz: der Dienst bleibt ohne Index und meldet "nicht pruefbar".
     leer = PackageConfig(repos=())
@@ -122,6 +118,22 @@ def _fenster(dunkel: bool, tmp: Path):
     fenster.resize(BREITE, HOEHE)
     fenster.show()
     return fenster
+
+
+def _auswahl_setzen(store) -> None:
+    """Eine gefuellte Zusammenstellung -- ein leeres Programm zeigt nichts.
+
+    Muss **nach** dem Verlassen der Startseite geschehen: die wendet ihre Wahl
+    erst beim Weitergehen an, und "Von vorn beginnen" ist vorgehakt. Vorher
+    gesetzte Auswahlen waeren dabei wieder weg.
+    """
+    store.toggle("desktop.kde", True)
+    store.toggle("apps.firefox", True)
+    store.toggle("apps.git", True)
+    store.toggle("apps.steam", True)
+    store.set_extra_packages(["neovim", "htop"])
+    store.set_field("branding.distro_name", "FloArch")
+    store.set_field("branding.version", "1.0")
 
 
 def _aufnehmen(fenster, ziel: Path, name: str) -> Path:
@@ -147,9 +159,19 @@ def erzeuge(ziel: Path, erscheinungen: list[str]) -> list[Path]:
         for erscheinung in erscheinungen:
             dunkel = erscheinung == "dunkel"
             fenster = _fenster(dunkel, tmp)
+
+            # Einmal weitergehen: das wendet die Wahl der Startseite an und
+            # macht den Weg fuer eine eigene Zusammenstellung frei.
+            gemacht.append(_aufnehmen(fenster, ziel, f"{erscheinung}-welcome"))
+            fenster._weiter()
+            _auswahl_setzen(fenster.store)
+            app.processEvents()
+
             for schritt in fenster.model.steps:
                 if not fenster.model.anklickbar(schritt):
                     continue
+                if schritt.id == "welcome":
+                    continue          # steht schon im Kasten
                 fenster._gehe_zu(schritt.id, animiert=False)
                 app.processEvents()
                 gemacht.append(
