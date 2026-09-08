@@ -161,9 +161,32 @@ Jede Fähigkeit daraus ist an anderer Stelle wieder da; die Abnahme lief gegen
 eine Paritätsliste in `docs/PLAN-Hofa.md`. `format_size`, `mono_font` und die
 Schriftstufen aus `theme.py` liegen jetzt in `gui/design/typo.py`.
 
+**Aus einer Durchsicht der neuen Oberfläche** (sieben Prüfrichtungen, jeder
+Befund gegengeprüft):
+
+- **Die Oberfläche startete gar nicht.** `run()` rief eine Eigenschaft als
+  Methode auf; das Programm stürzte ab, bevor ein Fenster zu sehen war. Kein
+  Test hatte `run()` je aufgerufen.
+- Eine Animation, deren Widget mitten in der Bewegung verschwand, blieb ewig in
+  der Buchführung stehen. Zweimal schnell „Weiter" genügte: die
+  Leerlaufzusicherung wurde damit dauerhaft falsch, und das Schließen des
+  Fensters brach mit einem Fehler ab.
+- Das Beenden brach den Bau ab und fragte **danach** nach der ungesicherten
+  Zusammenstellung. Wer dort abbrach, blieb im Programm — ohne seinen Bau.
+- Nach einem fehlgeschlagenen Bau gab es keinen Weg zurück; die
+  Protokollansicht hatte keinen einzigen Knopf.
+- Ein gescheiterter Abbruch war unsichtbar. Ein zu spät gekommener Abbruch warf
+  die Prüfsumme einer fertigen ISO weg.
+- Die Schrittliste war nur mit der Maus bedienbar.
+- Zwei Textfarben und zwei Knopfbeschriftungen erfüllten die AA-Schwelle nicht;
+  der Fokusrahmen auf einem akzentfarbenen Knopf war akzentfarben.
+- Ein Tippfehler im Validatornamen deaktivierte die Feldprüfung lautlos.
+- Der Protokollfilter erfasste weder Tracebacks noch Argumente, die keine
+  Zeichenketten sind — beide entstehen erst im Formatter.
+
 ### Tests
 
-Von 532 auf über 700. Neu unter anderem: Navigation ohne Qt, Bauseite mit
+Von 532 auf 738. Neu unter anderem: Navigation ohne Qt, Bauseite mit
 Attrappen-Auftrag, ISO-Plausibilität, Bauhistorie, Bau ohne Oberfläche,
 Startskripte, Kommandozeile.
 
