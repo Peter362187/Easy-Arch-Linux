@@ -42,3 +42,7 @@ __pycache__/
 Thumbs.db
 desktop.ini
 $RECYCLE.BIN/
+
+# Arbeitsdateien der Durchsicht
+*.tmp.md
+patch*_tmp.py

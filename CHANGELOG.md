@@ -149,7 +149,8 @@ gezeichnete Karten statt sechs Kindwidgets je Option.
   `FieldSpec.preview_role`. Die Oberfläche kennt weiterhin **keine** Kategorie
   namentlich.
 - `ruff` und `mypy` sind eingerichtet und laufen sauber durch.
-- `Claude Prompt.md` heißt jetzt `docs/SPEC.md`.
+- Der Auftragstext aus dem Wurzelverzeichnis heißt jetzt `docs/SPEC.md` —
+  ein Leerzeichen im Dateinamen bricht jeden zweiten Shell-Aufruf.
 
 ### Entfernt
 

@@ -109,8 +109,8 @@ Windows-Sicht (M14); der Tippfehler-Vorschlag läuft weiterhin ohne Vorfilter
   gemeinsamen Kern.
 * `tools/echtbau.py` enthielt ein fest eingebautes Passwort. Ersetzt durch
   `--build`.
-* Der Auftragstext lag als `Claude Prompt.md` im Wurzelverzeichnis; jetzt
-  `docs/SPEC.md`.
+* Der Auftragstext lag mit einem Leerzeichen im Dateinamen im
+  Wurzelverzeichnis; jetzt `docs/SPEC.md`.
 
 ---
 
