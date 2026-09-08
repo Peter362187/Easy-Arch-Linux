@@ -160,7 +160,17 @@ class ToastHost(QObject):
             setzen=toast.setze_deckkraft,
         )
         self._anordnen()
-        QTimer.singleShot(ANZEIGEDAUER_MS, lambda: self._schliessen(toast))
+
+        # Die Uhr haengt am Toast, nicht am Wirt. ``QTimer.singleShot`` haette
+        # nach viereinhalb Sekunden auch dann noch zugeschlagen, wenn das
+        # Fenster laengst zu ist: der Rueckruf haette dann ein geloeschtes
+        # C++-Objekt angefasst ("Internal C++ object already deleted"). Als
+        # Kind des Toasts stirbt die Uhr mit ihm.
+        uhr = QTimer(toast)
+        uhr.setSingleShot(True)
+        uhr.setInterval(ANZEIGEDAUER_MS)
+        uhr.timeout.connect(lambda: self._schliessen(toast))
+        uhr.start()
         return toast
 
     def _schliessen(self, toast: Toast) -> None:
@@ -176,6 +186,12 @@ class ToastHost(QObject):
             fertig=toast.deleteLater,
         )
         self._anordnen()
+
+    def schliesse_alle(self) -> None:
+        """Beim Schliessen des Fensters -- nichts soll nachklingen."""
+        for toast in list(self._sichtbar):
+            self._sichtbar.remove(toast)
+            toast.deleteLater()
 
     def _anordnen(self) -> None:
         werte = tokens()

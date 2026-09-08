@@ -1,12 +1,17 @@
-"""Formularseite -- rendert Textfelder, Auswahllisten und Passwortfelder.
+"""Formularseite -- Textfelder, Auswahllisten, Passwortfelder, Vorschau.
 
 Erzeugt Grundkonfiguration, Benutzerkonto, Branding und ISO-Einstellungen aus
 demselben Code. Ein neues Feld ist ein YAML-Eintrag.
 
 Passwoerter: Felder mit ``secret: true`` schreiben ausschliesslich in den
 SecretStore. Ihr Wert erreicht ``BuildConfig`` nie und kann damit strukturell
-nicht in einem Profil landen. Beim Verlassen der Seite wird zusaetzlich
-geprueft, ob Passwort und Wiederholung uebereinstimmen.
+nicht in einem Profil landen. Die Live-Pruefung liest den **angezeigten Text**
+und nicht den Store -- dorthin wandert der Wert erst beim Verlassen des Feldes,
+und die Wiederholung meldete sonst waehrend des Tippens dauerhaft "stimmen
+nicht ueberein".
+
+Neu ist die Vorschau rechts neben dem Formular. Welche es ist, sagt der Katalog
+ueber ``preview``; die Seite kennt keine Kategorie namentlich.
 """
 
 from __future__ import annotations
@@ -18,285 +23,184 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
-    QFileDialog,
     QFormLayout,
-    QHBoxLayout,
-    QLabel,
     QLineEdit,
-    QPushButton,
     QScrollArea,
     QSpinBox,
+    QSplitter,
     QTextEdit,
-    QVBoxLayout,
     QWidget,
 )
 
-from ...core import choices as choice_registry
 from ...core import validation
 from ...core.catalog import Category, FieldSpec
 from ...core.resolver import Issue
-from .. import theme
+from ..design import tokens
+from ..previews import PreviewContext
+from ..previews import create as vorschau_erzeugen
+from ..previews.registry import rollen_aus_katalog
 from ..store import SelectionStore
 from ..widgets.common import HintLabel
-from .base import CatalogPageBase
+from ..widgets.fields import FieldRow, waehle_pfad
+from .base import PageBase
 
 log = logging.getLogger(__name__)
 
 VALIDATION_DELAY_MS = 250
+# Unter dieser Fensterbreite steht die Vorschau ueber statt neben dem Formular.
+SCHMAL_AB = 1100
 
 
-class _FieldRow:
-    """Ein Feld samt Eingabewidget und Meldungszeile."""
-
-    __slots__ = ("browse", "container", "label", "message", "spec", "widget")
-
-    def __init__(
-        self,
-        spec: FieldSpec,
-        widget: QWidget,
-        message: QLabel,
-        label: QLabel,
-        container: QWidget,
-        browse: QPushButton | None = None,
-    ) -> None:
-        self.spec = spec
-        self.widget = widget
-        self.message = message
-        self.label = label
-        self.container = container
-        self.browse = browse
-
-
-class CatalogFormPage(CatalogPageBase):
+class CatalogFormPage(PageBase):
     def __init__(self, category: Category, store: SelectionStore) -> None:
         super().__init__(category, store)
-        self._rows: dict[str, _FieldRow] = {}
+        self._rows: dict[str, FieldRow] = {}
         self._valid: dict[str, bool] = {}
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.setInterval(VALIDATION_DELAY_MS)
-        self._timer.timeout.connect(self._validate_all)
-        self._build_ui()
-        self._add_required_legend()
-        self.add_help_link()
-        self.store.fieldChanged.connect(self._on_field_changed)
+        self._timer.timeout.connect(self._alles_pruefen)
 
-    def _on_field_changed(self, _binding: str) -> None:
+        self._aufbauen()
+        self._pflichtlegende()
+        self.add_help_link()
+        self.store.fieldChanged.connect(self._feld_geaendert)
+
+    def _feld_geaendert(self, _binding: str) -> None:
         """Sichtbarkeit UND Gueltigkeit neu bestimmen.
 
-        Frueher lief nur die Sichtbarkeit. Wurde ein ungueltiges
-        Pflichtfeld durch eine andere Eingabe unsichtbar, blieb sein
-        Eintrag in ``_valid`` bis zum naechsten Timerlauf auf False und
-        sperrte den Weiter-Knopf.
+        Frueher lief nur die Sichtbarkeit. Wurde ein ungueltiges Pflichtfeld
+        durch eine andere Eingabe unsichtbar, blieb sein Eintrag bis zum
+        naechsten Timerlauf auf "ungueltig" und sperrte den Weiter-Knopf.
         """
-        self._update_visibility()
+        self._sichtbarkeit()
         self._timer.start()
 
     # -- Aufbau ---------------------------------------------------------------
-    def _build_ui(self) -> None:
-        container = QWidget()
-        form = QFormLayout(container)
-        form.setSpacing(8)
+    def _aufbauen(self) -> None:
+        werte = tokens()
+        behaelter = QWidget()
+        form = QFormLayout(behaelter)
+        form.setSpacing(werte.space.md)
+        form.setContentsMargins(0, 0, werte.space.sm, 0)
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
-        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        # Beschriftung ueber dem Feld statt daneben: bei laengeren deutschen
+        # Woertern ("Hintergrundbild des Bootmenues") blieb rechts sonst kaum
+        # Platz fuer das Eingabefeld.
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
 
         for spec in self.category.fields:
-            widget, browse = self._make_widget(spec)
-            message = QLabel("")
-            message.setWordWrap(True)
-            message.setFont(theme.small_font())
-            message.hide()
+            zeile = FieldRow(spec)
+            self._verdrahten(zeile)
+            form.addRow(zeile)
+            self._rows[spec.id] = zeile
 
-            cell = QWidget()
-            cell_layout = QVBoxLayout(cell)
-            cell_layout.setContentsMargins(0, 0, 0, 0)
-            cell_layout.setSpacing(2)
+        rolle = QScrollArea()
+        rolle.setWidgetResizable(True)
+        rolle.setFrameShape(QScrollArea.Shape.NoFrame)
+        rolle.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        rolle.setWidget(behaelter)
 
-            if browse is not None:
-                row = QHBoxLayout()
-                row.setContentsMargins(0, 0, 0, 0)
-                row.addWidget(widget, 1)
-                row.addWidget(browse, 0)
-                cell_layout.addLayout(row)
-            else:
-                cell_layout.addWidget(widget)
+        self.vorschau = self._vorschau_erzeugen()
+        if self.vorschau is None:
+            self._root.addWidget(rolle, 1)
+            return
 
-            if spec.help:
-                hint = QLabel(spec.help)
-                hint.setWordWrap(True)
-                hint.setFont(theme.small_font())
-                hint.setStyleSheet(f"color: {theme.muted()};")
-                cell_layout.addWidget(hint)
-            cell_layout.addWidget(message)
+        self._splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._splitter.addWidget(rolle)
+        self._splitter.addWidget(self.vorschau)
+        self._splitter.setStretchFactor(0, 3)
+        self._splitter.setStretchFactor(1, 2)
+        self._splitter.setChildrenCollapsible(False)
+        self._root.addWidget(self._splitter, 1)
 
-            label = QLabel(spec.label + (" *" if spec.required else ""))
-            if spec.required:
-                label.setToolTip("Pflichtfeld")
-            form.addRow(label, cell)
-            self._rows[spec.id] = _FieldRow(spec, widget, message, label, cell, browse)
+    def _vorschau_erzeugen(self) -> QWidget | None:
+        if not self.category.preview:
+            return None
+        kontext = PreviewContext(self.store, rollen_aus_katalog(self.store.catalog))
+        return vorschau_erzeugen(self.category.preview, kontext)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setWidget(container)
-        self._root.addWidget(scroll, 1)
+    def _verdrahten(self, zeile: FieldRow) -> None:
+        spec = zeile.spec
+        widget = zeile.widget
 
-    def _make_widget(self, spec: FieldSpec) -> tuple[QWidget, QPushButton | None]:
-        if spec.widget == "bool":
-            widget = QCheckBox()
-            widget.toggled.connect(lambda value, s=spec: self._on_changed(s, value))
-            return widget, None
-
-        if spec.widget == "int":
-            spin = QSpinBox()
-            spin.setRange(
-                spec.minimum if spec.minimum is not None else 0,
-                spec.maximum if spec.maximum is not None else 9999,
+        if isinstance(widget, QCheckBox):
+            widget.toggled.connect(lambda wert, s=spec: self._geaendert(s, wert))
+        elif isinstance(widget, QSpinBox):
+            widget.valueChanged.connect(lambda wert, s=spec: self._geaendert(s, wert))
+        elif isinstance(widget, QComboBox):
+            widget.currentIndexChanged.connect(
+                lambda _i, s=spec, z=zeile: self._geaendert(s, z.angezeigter_text())
             )
-            spin.valueChanged.connect(lambda value, s=spec: self._on_changed(s, value))
-            return spin, None
-
-        if spec.widget in ("combo", "editable_combo"):
-            combo = QComboBox()
-            combo.setEditable(spec.widget == "editable_combo")
-            if spec.choices:
-                for choice in spec.choices:
-                    combo.addItem(choice.display, choice.value)
-            elif spec.choices_from:
-                for value in choice_registry.get_choices(spec.choices_from):
-                    combo.addItem(value, value)
-            if combo.isEditable():
-                combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
-                combo.lineEdit().textEdited.connect(
-                    lambda text, s=spec: self._on_changed(s, text)
+            if widget.isEditable():
+                widget.lineEdit().textEdited.connect(
+                    lambda text, s=spec: self._geaendert(s, text)
                 )
-            combo.currentIndexChanged.connect(
-                lambda _index, s=spec, c=combo: self._on_changed(s, _combo_value(c))
+        elif isinstance(widget, QTextEdit):
+            widget.textChanged.connect(
+                lambda s=spec, w=widget: self._geaendert(s, w.toPlainText())
             )
-            return combo, None
+        elif isinstance(widget, QLineEdit):
+            if spec.secret:
+                # Bei geheimen Feldern bewusst NICHT je Tastendruck: jeder
+                # Zwischenstand erzeugte ein eigenes ``Secret`` und meldete
+                # sich beim Log-Filter an. Ein Passwort "archiso" hinterliess
+                # so die Literale "arc", "arch", "archi" -- und jedes davon
+                # wurde fortan in jeder Logzeile ersetzt, auch mitten im Wort.
+                widget.editingFinished.connect(
+                    lambda s=spec, w=widget: self._geaendert(s, w.text())
+                )
+                widget.textEdited.connect(lambda _t: self._timer.start())
+            else:
+                widget.textEdited.connect(lambda text, s=spec: self._geaendert(s, text))
 
-        if spec.widget == "textarea":
-            area = QTextEdit()
-            area.setAcceptRichText(False)
-            # Mindest- statt Festhoehe: bei groesserer Systemschrift
-            # schnitt die feste Hoehe den Text ab.
-            area.setMinimumHeight(80)
-            area.setMaximumHeight(200)
-            area.textChanged.connect(
-                lambda s=spec, a=area: self._on_changed(s, a.toPlainText())
+        if zeile.browse is not None:
+            zeile.browse.clicked.connect(
+                lambda _c=False, s=spec: self._durchsuchen(s)
             )
-            return area, None
-
-        edit = QLineEdit()
-        if spec.placeholder:
-            edit.setPlaceholderText(spec.placeholder)
-        if spec.secret:
-            edit.setEchoMode(QLineEdit.EchoMode.Password)
-            # Bei geheimen Feldern bewusst NICHT je Tastendruck: jeder
-            # Zwischenstand erzeugte ein eigenes ``Secret`` und meldete sich beim
-            # Log-Filter an. Ein Passwort "archiso" hinterliess so die Literale
-            # "arc", "arch", "archi", "archis" -- und jedes davon wurde fortan in
-            # jeder Logzeile ersetzt, auch mitten im Wort. Aus "Installiere
-            # archiso" wurde "Installiere ***".
-            #
-            # editingFinished feuert beim Verlassen des Feldes und bei Eingabe,
-            # also einmal je vollstaendigem Wert. Die Live-Pruefung des Formulars
-            # laeuft weiter ueber textEdited, nur ohne den Wert zu speichern.
-            edit.editingFinished.connect(
-                lambda s=spec, e=edit: self._on_changed(s, e.text())
-            )
-            edit.textEdited.connect(lambda _text: self._timer.start())
-        else:
-            if spec.widget == "password":
-                edit.setEchoMode(QLineEdit.EchoMode.Password)
-            edit.textEdited.connect(lambda text, s=spec: self._on_changed(s, text))
-
-        browse = None
-        if spec.widget == "path":
-            browse = QPushButton("Durchsuchen ...")
-            browse.clicked.connect(lambda _checked=False, s=spec: self._browse(s))
-        return edit, browse
 
     # -- Ereignisse -----------------------------------------------------------
-    def _on_changed(self, spec: FieldSpec, value: Any) -> None:
+    def _geaendert(self, spec: FieldSpec, wert: Any) -> None:
         if spec.secret:
-            # Geht ausschliesslich in den SecretStore.
-            self.store.set_secret(spec.binding, str(value))
+            self.store.set_secret(spec.binding, str(wert))
         else:
-            self.store.set_field(spec.binding, value)
+            self.store.set_field(spec.binding, wert)
         self._timer.start()
 
-    # Validatoren, hinter denen ein Verzeichnis steht und keine Datei.
-    _VERZEICHNIS_VALIDATOREN = frozenset({"writable_dir"})
-
-    def _browse(self, spec: FieldSpec) -> None:
-        """Oeffnet den Dialog, der zum Feld passt.
-
-        Fuer 'Ausgabeverzeichnis' und 'Arbeitsverzeichnis' erschien bisher
-        ein Datei-Oeffnen-Dialog; ein Verzeichnis liess sich damit gar
-        nicht waehlen, und eine gewaehlte Datei scheiterte anschliessend
-        am Validator.
-        """
+    def _durchsuchen(self, spec: FieldSpec) -> None:
         start = str(self.store.field(spec.binding) or "")
-        if spec.validator in self._VERZEICHNIS_VALIDATOREN:
-            selected = QFileDialog.getExistingDirectory(self, spec.label, start)
-        else:
-            selected, _filter = QFileDialog.getOpenFileName(
-                self, spec.label, start, spec.file_filter or "Alle Dateien (*)"
-            )
-        if selected:
-            row = self._rows[spec.id]
-            if isinstance(row.widget, QLineEdit):
-                row.widget.setText(selected)
-            self._on_changed(spec, selected)
+        gewaehlt = waehle_pfad(spec, start, self)
+        if not gewaehlt:
+            return
+        zeile = self._rows[spec.id]
+        zeile.setze_wert(gewaehlt)
+        self._geaendert(spec, gewaehlt)
 
     # -- Anzeige --------------------------------------------------------------
     def sync_from_store(self) -> None:
-        for spec_id, row in self._rows.items():
-            spec = row.spec
+        for zeile in self._rows.values():
+            spec = zeile.spec
             if spec.secret:
-                # Geheimnisse werden nie zurueckgeschrieben -- aber ein
-                # leerer SecretStore muss auch ein leeres Feld bedeuten.
-                # Nach dem Laden eines Profils standen sonst weiter Punkte
-                # im Feld, waehrend die Meldung "wird benoetigt" erschien.
+                # Geheimnisse werden nie zurueckgeschrieben -- aber ein leerer
+                # SecretStore muss auch ein leeres Feld bedeuten. Nach dem
+                # Laden eines Profils standen sonst weiter Punkte im Feld,
+                # waehrend die Meldung "wird benoetigt" erschien.
                 if not self.store.has_secret(spec.binding):
-                    blocked = row.widget.blockSignals(True)
-                    try:
-                        if isinstance(row.widget, QLineEdit):
-                            row.widget.clear()
-                    finally:
-                        row.widget.blockSignals(blocked)
+                    zeile.leeren()
                 continue
-            value = self.store.field(spec.binding, spec.default)
-            widget = row.widget
-            blocked = widget.blockSignals(True)
-            try:
-                if isinstance(widget, QCheckBox):
-                    widget.setChecked(bool(value))
-                elif isinstance(widget, QSpinBox):
-                    widget.setValue(int(value or 0))
-                elif isinstance(widget, QComboBox):
-                    _set_combo_value(widget, value)
-                elif isinstance(widget, QTextEdit):
-                    widget.setPlainText(str(value or ""))
-                elif isinstance(widget, QLineEdit):
-                    widget.setText(str(value or ""))
-            finally:
-                widget.blockSignals(blocked)
-        self._update_visibility()
-        self._validate_all()
+            zeile.setze_wert(self.store.field(spec.binding, spec.default))
+        self._sichtbarkeit()
+        self._alles_pruefen()
 
-    def _update_visibility(self) -> None:
-        context = self.store.context()
-        for row in self._rows.values():
-            visible = row.spec.visible_when.evaluate(context)
-            enabled = visible and row.spec.enabled_when.evaluate(context)
-            row.container.setVisible(visible)
-            row.label.setVisible(visible)
-            row.container.setEnabled(enabled)
+    def _sichtbarkeit(self) -> None:
+        kontext = self.store.context()
+        for zeile in self._rows.values():
+            sichtbar = zeile.spec.visible_when.evaluate(kontext)
+            zeile.setze_sichtbar(sichtbar)
+            zeile.setEnabled(sichtbar and zeile.spec.enabled_when.evaluate(kontext))
 
-    def _add_required_legend(self) -> None:
+    def _pflichtlegende(self) -> None:
         """Erklaeren, was der Stern bedeutet.
 
         Er stand bisher an den Beschriftungen, ohne dass irgendwo erklaert war,
@@ -306,74 +210,79 @@ class CatalogFormPage(CatalogPageBase):
             return
         self._root.addWidget(HintLabel("* Pflichtfeld"))
 
-    def _validate_all(self) -> None:
-        context = self.store.context()
-        for row in self._rows.values():
-            spec = row.spec
-            active = spec.visible_when.evaluate(context) and spec.enabled_when.evaluate(context)
-            if not active:
+    # -- Pruefung -------------------------------------------------------------
+    def _alles_pruefen(self) -> None:
+        kontext = self.store.context()
+        for zeile in self._rows.values():
+            spec = zeile.spec
+            aktiv = spec.visible_when.evaluate(kontext) and spec.enabled_when.evaluate(
+                kontext
+            )
+            if not aktiv:
                 self._valid[spec.id] = True
-                row.message.hide()
+                zeile.verstecke_meldung()
                 continue
 
             if spec.secret:
-                # Direkt aus dem Feld lesen, nicht aus dem Store: dorthin
-                # wandert der Wert erst bei editingFinished (damit nicht
-                # jeder Zwischenstand als Literal beim Log-Filter landet).
-                # Die Pruefung sah deshalb waehrend des Tippens immer den
-                # alten Wert: die Wiederholung meldete dauerhaft "stimmen
-                # nicht ueberein", und der Weiter-Knopf brauchte zwei Klicks.
-                text = self._angezeigter_text(row)
+                text = zeile.angezeigter_text()
             else:
                 text = self.store.field(spec.binding, spec.default)
 
             if spec.required and not str(text or "").strip():
-                self._show(row, f"{spec.label} wird benoetigt.", ok=False)
+                zeile.zeige_meldung(f"{spec.label} wird benoetigt.", warnung=False)
                 self._valid[spec.id] = False
                 continue
 
             if spec.confirm_field:
-                # Bei einem NICHT geheimen Feld war ``other`` frueher per
-                # Konstruktion None und ``second`` damit leer -- jede nichtleere
-                # Eingabe meldete dauerhaft "stimmen nicht ueberein". Heute
-                # ungenutzt, aber eine Falle fuer den naechsten Katalogeintrag.
-                zweitwert = self._value_of(spec.confirm_field, secret=spec.secret)
-                first = str(text or "")
-                if first and first != zweitwert:
-                    ziel = self._rows.get(spec.confirm_field, row)
-                    self._show(
-                        ziel, "Die beiden Eingaben stimmen nicht ueberein.", ok=False
+                zweitwert = self._wert_von(spec.confirm_field, secret=spec.secret)
+                erster = str(text or "")
+                if erster and erster != zweitwert:
+                    ziel = self._rows.get(spec.confirm_field, zeile)
+                    ziel.zeige_meldung(
+                        "Die beiden Eingaben stimmen nicht ueberein.", warnung=False
                     )
                     self._valid[spec.id] = False
                     continue
                 # Stimmen sie ueberein, muss die Meldung am Wiederholungsfeld
                 # auch wieder verschwinden.
                 if spec.confirm_field in self._rows:
-                    self._rows[spec.confirm_field].message.hide()
+                    self._rows[spec.confirm_field].verstecke_meldung()
 
             if spec.validator:
-                result = validation.validate(spec.validator, text)
-                if not result.ok:
-                    self._show(row, result.message, ok=result.is_warning)
-                    self._valid[spec.id] = result.is_warning
+                ergebnis = validation.validate(spec.validator, text)
+                if not ergebnis.ok:
+                    zeile.zeige_meldung(ergebnis.message, warnung=ergebnis.is_warning)
+                    self._valid[spec.id] = ergebnis.is_warning
                     continue
 
-            row.message.hide()
+            zeile.verstecke_meldung()
             self._valid[spec.id] = True
 
-        self._publish_field_errors()
+        self._feldfehler_melden()
         self.completeChanged.emit()
 
-    def _hashing_warning(self) -> Issue | None:
+    def _wert_von(self, field_id: str, *, secret: bool) -> str:
+        """Der Wert eines anderen Feldes -- aus dem passenden Speicher.
+
+        Geheime Felder liegen im ``SecretStore``, alle anderen in der
+        Konfiguration. Vorher wurde nur der erste Fall bedacht -- bei einem
+        nicht geheimen Feld war der Vergleichswert per Konstruktion leer, und
+        jede nichtleere Eingabe meldete dauerhaft "stimmen nicht ueberein".
+        """
+        zeile = self._rows.get(field_id)
+        if secret:
+            return zeile.angezeigter_text() if zeile is not None else ""
+        spec = self.category.field(field_id)
+        binding = spec.binding if spec else f"{self.category.id}.{field_id}"
+        return str(self.store.field(binding) or "")
+
+    def _hashing_warnung(self) -> Issue | None:
         """Warnen, wenn sich ein Passwort hier gar nicht setzen laesst.
 
-        ``hashing_available()`` gibt es seit jeher, aufgerufen hat es niemand --
-        obwohl sein Docstring genau diesen Fall beschreibt. Ohne eine Moeglichkeit
-        zu hashen wird das Konto gesperrt angelegt; das Feld anzubieten und
-        stillschweigend nichts damit zu tun waere die schlechteste Auskunft.
-
-        Das Feld bleibt trotzdem stehen: es auszublenden wuerde die Frage
-        aufwerfen, warum es fehlt.
+        Ohne eine Moeglichkeit zu hashen wird das Konto gesperrt angelegt; das
+        Feld anzubieten und stillschweigend nichts damit zu tun waere die
+        schlechteste Auskunft. Das Feld bleibt trotzdem stehen: es
+        auszublenden wuerde die Frage aufwerfen, warum es fehlt.
         """
         if not any(spec.secret for spec in self.category.fields):
             return None
@@ -392,7 +301,7 @@ class CatalogFormPage(CatalogPageBase):
             ),
         )
 
-    def _publish_field_errors(self) -> None:
+    def _feldfehler_melden(self) -> None:
         """Die Feldfehler zusaetzlich nach oben geben.
 
         Ist der Weiter-Knopf gesperrt, weil ein Pflichtfeld weiter oben leer
@@ -402,75 +311,24 @@ class CatalogFormPage(CatalogPageBase):
         for spec_id, gueltig in self._valid.items():
             if gueltig:
                 continue
-            row = self._rows.get(spec_id)
-            if row is None:
+            zeile = self._rows.get(spec_id)
+            if zeile is None:
                 continue
             meldungen.append(
                 Issue(
                     severity="error",
                     code="field_invalid",
                     category_id=self.category.id,
-                    message=f"{row.spec.label}: {row.message.text()}",
+                    message=f"{zeile.spec.label}: {zeile.meldung.text()}",
                 )
             )
-        hinweis = self._hashing_warning()
+        hinweis = self._hashing_warnung()
         if hinweis is not None:
             meldungen.append(hinweis)
         self.set_local_issues(tuple(meldungen))
 
-    def _angezeigter_text(self, row: _FieldRow) -> str:
-        """Was gerade im Eingabefeld steht -- unabhaengig vom Store."""
-        widget = row.widget
-        if isinstance(widget, QLineEdit):
-            return widget.text()
-        if isinstance(widget, QTextEdit):
-            return widget.toPlainText()
-        return ""
-
-    def _value_of(self, field_id: str, *, secret: bool) -> str:
-        """Der Wert eines anderen Feldes -- aus dem passenden Speicher.
-
-        Geheime Felder liegen im ``SecretStore``, alle anderen in der
-        Konfiguration. Vorher wurde nur der erste Fall bedacht.
-        """
-        if secret:
-            # Auch hier der angezeigte Text: der Store hinkt bei geheimen
-            # Feldern bis zum Fokuswechsel hinterher.
-            row = self._rows.get(field_id)
-            if row is not None:
-                return self._angezeigter_text(row)
-            return ""
-        return str(self.store.field(self._binding_of(field_id)) or "")
-
-    def _binding_of(self, field_id: str) -> str:
-        spec = self.category.field(field_id)
-        return spec.binding if spec else f"{self.category.id}.{field_id}"
-
-    @staticmethod
-    def _show(row: _FieldRow, message: str, *, ok: bool) -> None:
-        colour = theme.warning() if ok else theme.danger()
-        row.message.setText(message)
-        row.message.setFont(theme.small_font())
-        row.message.setStyleSheet(f"color: {colour};")
-        row.message.show()
-
-    def isComplete(self) -> bool:
-        return all(self._valid.values()) and super().isComplete()
+    def is_complete(self) -> bool:
+        return all(self._valid.values()) and super().is_complete()
 
 
-def _combo_value(combo: QComboBox) -> str:
-    data = combo.currentData()
-    if data is not None:
-        return str(data)
-    return combo.currentText()
-
-
-def _set_combo_value(combo: QComboBox, value: Any) -> None:
-    text = "" if value is None else str(value)
-    index = combo.findData(text)
-    if index < 0:
-        index = combo.findText(text)
-    if index >= 0:
-        combo.setCurrentIndex(index)
-    elif combo.isEditable():
-        combo.setCurrentText(text)
+__all__ = ["CatalogFormPage"]

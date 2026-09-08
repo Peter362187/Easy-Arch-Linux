@@ -83,8 +83,14 @@ def test_macos_is_marked_the_same_way(tmp_path, monkeypatch) -> None:
 
 
 def test_the_gui_recognises_that_marker() -> None:
-    """Die Oberflaeche hing an einem Zeichenketten-Literal aus dem Kern."""
-    from archcustomiser.gui.wizard import BuildWizard
+    """Die Oberflaeche hing an einem Zeichenketten-Literal aus dem Kern.
+
+    Frueher verglich sie den Prueftext "Betriebssystem", den es nur bei einem
+    Nicht-Linux gab. Auf Ubuntu ist die Plattform aber "linux", der Vergleich
+    schlug also nie an -- und der Vorschlag "Profil stattdessen exportieren"
+    wurde ausgerechnet dort nie ausgeloest, wo er gebraucht wird.
+    """
+    from archcustomiser.gui.build_flow import can_build_here
 
     class FakeCheck:
         def __init__(self, name: str) -> None:
@@ -94,8 +100,8 @@ def test_the_gui_recognises_that_marker() -> None:
         def __init__(self, *namen: str) -> None:
             self.blocking = [FakeCheck(n) for n in namen]
 
-    assert not BuildWizard._can_build_here(FakeReport(NOT_BUILDABLE_HERE))
-    assert BuildWizard._can_build_here(FakeReport("Plattenplatz"))
+    assert not can_build_here(FakeReport(NOT_BUILDABLE_HERE))
+    assert can_build_here(FakeReport("Plattenplatz"))
 
 
 # ---------------------------------------------------------------------------

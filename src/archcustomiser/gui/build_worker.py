@@ -13,6 +13,7 @@ sichtbar stocken.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from pathlib import Path
 
@@ -30,6 +31,9 @@ log = logging.getLogger(__name__)
 
 FLUSH_INTERVAL_MS = 120
 MAX_PENDING_LINES = 500
+# Blockgroesse der Pruefsummenberechnung. Groesser bringt nichts mehr, die
+# Platte ist die Grenze; kleiner macht den Abbruch nur unwesentlich flinker.
+HASH_BLOCK = 1024 * 1024
 
 
 class _BuildThread(QThread):
@@ -38,7 +42,7 @@ class _BuildThread(QThread):
     stepChanged = Signal(object, str)        # (Step, Beschriftung)
     progressChanged = Signal(float, str, str)
     lineReceived = Signal(str)
-    finishedOk = Signal(object)              # BuildOutcome
+    finishedOk = Signal(object, str)         # (BuildOutcome, SHA-256)
     failed = Signal(object)                  # Exception
     cancelledByUser = Signal()
 
@@ -66,7 +70,8 @@ class _BuildThread(QThread):
                 on_progress=lambda f, label, detail: self.progressChanged.emit(f, label, detail),
                 on_line=self.lineReceived.emit,
             )
-            self.finishedOk.emit(outcome)
+            pruefsumme = self._pruefsumme(outcome)
+            self.finishedOk.emit(outcome, pruefsumme)
         except BuildCancelled:
             self.cancelledByUser.emit()
         except (BuildError, ProfileError) as exc:
@@ -75,6 +80,32 @@ class _BuildThread(QThread):
         except Exception as exc:      # darf die Anwendung nie mitreissen
             log.exception("Unerwarteter Fehler im Build")
             self.failed.emit(exc)
+
+    def _pruefsumme(self, outcome) -> str:
+        """SHA-256 der fertigen ISO -- hier im Bau-Faden, nicht in der Oberflaeche.
+
+        Eine ISO ist zwei bis vier Gigabyte gross. Sie im Oberflaechenfaden zu
+        lesen legt das Fenster fuer mehrere Sekunden still, ausgerechnet in dem
+        Moment, in dem der Benutzer nach einer halben Stunde das Ergebnis sehen
+        will.
+
+        Die Summe ist kein Beiwerk: wer die ISO auf einen USB-Stick schreibt,
+        braucht sie, um einen stillen Uebertragungsfehler zu bemerken.
+        """
+        pfad = getattr(outcome, "iso_path", None)
+        if pfad is None or not pfad.is_file():
+            return ""
+        digest = hashlib.sha256()
+        try:
+            with pfad.open("rb") as datei:
+                while block := datei.read(HASH_BLOCK):
+                    if self.controller.cancelled:
+                        return ""
+                    digest.update(block)
+        except OSError as exc:
+            log.warning("Pruefsumme nicht berechenbar: %s", exc)
+            return ""
+        return digest.hexdigest()
 
 
 class _CancelThread(QThread):
@@ -108,7 +139,7 @@ class BuildJob(QObject):
     stepChanged = Signal(object, str)
     progressChanged = Signal(float, str, str)
     linesReceived = Signal(list)             # gebuendelt, nicht einzeln
-    finished = Signal(object)
+    finished = Signal(object, str)           # (BuildOutcome, SHA-256)
     failed = Signal(object)
     cancelled = Signal()
 
@@ -227,9 +258,9 @@ class BuildJob(QObject):
         if thread is not None:
             thread.deleteLater()
 
-    def _on_finished(self, outcome: object) -> None:
+    def _on_finished(self, outcome: object, sha256: str) -> None:
         self._finish()
-        self.finished.emit(outcome)
+        self.finished.emit(outcome, sha256)
 
     def _on_failed(self, error: object) -> None:
         self._finish()

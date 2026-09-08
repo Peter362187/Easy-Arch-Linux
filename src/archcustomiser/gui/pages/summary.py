@@ -1,13 +1,15 @@
-"""Zusammenfassung und Dry-Run (Spec Abschnitt 14).
+"""Zusammenfassung und Dry-Run.
 
 Zeigt den vollstaendigen Bauplan, bevor irgendetwas geschieht: Auswahl,
-aufgeloeste Paketliste, systemd-Symlinks, abgeleiteter ISO-Dateiname, Alter der
-Paketdaten und alle offenen Hinweise.
+aufgeloeste Paketliste, systemd-Symlinks, abgeleiteter ISO-Dateiname und alle
+offenen Hinweise.
 
-Die zweite Registerkarte zeigt die erzeugte ``archinstall.json``. Das ist kein
+Die dritte Registerkarte zeigt die erzeugte ``archinstall.json``. Das ist kein
 Beiwerk: archiso baut nur ein Live-System, und ohne diese Konfiguration koennte
 der Benutzer das Ergebnis nicht dauerhaft installieren. Sie hier sichtbar zu
 machen, deckt fehlende semantische Zuordnungen im Katalog sofort auf.
+
+Die vierte zeigt den Profilbaum, bevor eine einzige Datei entsteht.
 """
 
 from __future__ import annotations
@@ -29,16 +31,18 @@ from ...core.archiso import GeneratedProfile
 from ...core.archiso.errors import ProfileError
 from ...core.catalog import Category
 from ...core.plan import BuildPlan, build_plan, plan_as_text
-from .. import theme
+from ...core.resolver import Issue
+from ..design import tokens
+from ..design.typo import SUBTITLE, format_size, mono, schrift
 from ..packages_worker import PackageController
 from ..store import SelectionStore
 from ..widgets.common import brush, copy_to_clipboard
-from .base import CatalogPageBase
+from .base import PageBase
 
 log = logging.getLogger(__name__)
 
 
-class SummaryPage(CatalogPageBase):
+class SummaryPage(PageBase):
     def __init__(
         self,
         category: Category,
@@ -50,19 +54,12 @@ class SummaryPage(CatalogPageBase):
         self._plan: BuildPlan | None = None
         self._profile: GeneratedProfile | None = None
         self._profile_error = ""
-        self._build_ui()
-        # Nach dieser Seite beginnt der Build -- Qt blendet den Zurueck-Knopf
-        # dann aus. Das ist gewollt: eine halb gestartete ISO-Erzeugung laesst
-        # sich nicht durch Zurueckblaettern rueckgaengig machen.
-        self.setCommitPage(True)
+        self._aufbauen()
 
-    def _build_ui(self) -> None:
+    def _aufbauen(self) -> None:
         self.headline = QLabel()
         self.headline.setWordWrap(True)
-        font = self.headline.font()
-        font.setPointSize(font.pointSize() + 2)
-        font.setBold(True)
-        self.headline.setFont(font)
+        self.headline.setFont(schrift(SUBTITLE, fett=True))
         self._root.addWidget(self.headline)
 
         self.tabs = QTabWidget()
@@ -75,15 +72,14 @@ class SummaryPage(CatalogPageBase):
 
         self.symlinks = QPlainTextEdit()
         self.symlinks.setReadOnly(True)
-        self.symlinks.setFont(theme.mono_font())
+        self.symlinks.setFont(mono())
         self.tabs.addTab(self.symlinks, "systemd-Verknuepfungen")
 
         self.archinstall = QPlainTextEdit()
         self.archinstall.setReadOnly(True)
-        self.archinstall.setFont(theme.mono_font())
+        self.archinstall.setFont(mono())
         self.tabs.addTab(self.archinstall, "Installationskonfiguration")
 
-        # Zeigt den erzeugten Profilbaum, bevor eine einzige Datei entsteht.
         self.files = QTreeWidget()
         self.files.setHeaderLabels(["Datei", "Art", "Groesse", "Herkunft"])
         self.files.setRootIsDecorated(False)
@@ -93,25 +89,23 @@ class SummaryPage(CatalogPageBase):
 
         self._root.addWidget(self.tabs, 1)
 
-        footer = QHBoxLayout()
+        fuss = QHBoxLayout()
         self.copy_button = QPushButton("Bauplan in die Zwischenablage")
-        self.copy_button.clicked.connect(self._copy)
-        footer.addWidget(self.copy_button)
-        footer.addStretch(1)
+        self.copy_button.setProperty("variant", "ghost")
+        self.copy_button.clicked.connect(self._kopieren)
+        fuss.addWidget(self.copy_button)
+        fuss.addStretch(1)
         self.verdict = QLabel()
         self.verdict.setWordWrap(True)
-        footer.addWidget(self.verdict, 1)
-        self._root.addLayout(footer)
+        fuss.addWidget(self.verdict, 1)
+        self._root.addLayout(fuss)
 
     # -- Inhalt ---------------------------------------------------------------
-    def initializePage(self) -> None:
-        super().initializePage()
-        self._rebuild()
-
     def sync_from_store(self) -> None:
-        self._rebuild()
+        self._neu_aufbauen()
 
-    def _rebuild(self) -> None:
+    def _neu_aufbauen(self) -> None:
+        p = tokens().palette
         config = self.store.config
         resolution = self.store.resolution()
         report = self.controller.validate(
@@ -122,28 +116,29 @@ class SummaryPage(CatalogPageBase):
         self._plan = plan
 
         self.headline.setText(
-            f"{config.distro_name} {config.version}  →  {plan.iso_filename}"
+            f"{config.distro_name} {config.version}  ->  {plan.iso_filename}"
         )
 
         self.tree.clear()
-        for section in plan.sections:
-            parent = QTreeWidgetItem([section.title, ""])
-            font = parent.font(0)
+        for abschnitt in plan.sections:
+            eltern = QTreeWidgetItem([abschnitt.title, ""])
+            font = eltern.font(0)
             font.setBold(True)
-            parent.setFont(0, font)
-            for line in section.lines:
-                key, separator, value = line.partition(": ")
-                child = QTreeWidgetItem([key, value] if separator else ["", line])
-                parent.addChild(child)
-            for detail in section.detail:
-                child = QTreeWidgetItem(["", detail])
-                child.setForeground(1, brush(theme.muted()))
-                parent.addChild(child)
-            self.tree.addTopLevelItem(parent)
-            parent.setExpanded(len(section.lines) <= 12)
+            eltern.setFont(0, font)
+            for zeile in abschnitt.lines:
+                schluessel, trenner, wert = zeile.partition(": ")
+                eltern.addChild(
+                    QTreeWidgetItem([schluessel, wert] if trenner else ["", zeile])
+                )
+            for detail in abschnitt.detail:
+                kind = QTreeWidgetItem(["", detail])
+                kind.setForeground(1, brush(p.text_muted))
+                eltern.addChild(kind)
+            self.tree.addTopLevelItem(eltern)
+            eltern.setExpanded(len(abschnitt.lines) <= 12)
 
         self.symlinks.setPlainText(
-            "\n".join(f"{link}\n    -> {target}" for link, target in plan.symlinks)
+            "\n".join(f"{link}\n    -> {ziel}" for link, ziel in plan.symlinks)
             or "Keine Dienste aktiviert."
         )
         self.archinstall.setPlainText(
@@ -151,27 +146,32 @@ class SummaryPage(CatalogPageBase):
         )
 
         if plan.warnings:
-            self.verdict.setText(
-                f"{len(plan.warnings)} Hinweis(e) -- siehe unten"
-            )
-            self.verdict.setStyleSheet(f"color:{theme.warning()};")
+            self.verdict.setText(f"{len(plan.warnings)} Hinweis(e) -- siehe unten")
+            self._verdict_rolle("warnung")
         else:
-            self.verdict.setText("Die Konfiguration ist vollstaendig und in sich stimmig.")
-            self.verdict.setStyleSheet(f"color:{theme.success()};")
+            self.verdict.setText(
+                "Die Konfiguration ist vollstaendig und in sich stimmig."
+            )
+            self._verdict_rolle("erfolg")
 
-        self._refresh_files()
+        self._dateien_zeigen()
 
         if plan.warnings:
-            item = QTreeWidgetItem(["Hinweise", ""])
-            font = item.font(0)
+            eintrag = QTreeWidgetItem(["Hinweise", ""])
+            font = eintrag.font(0)
             font.setBold(True)
-            item.setFont(0, font)
-            for warning in plan.warnings:
-                item.addChild(QTreeWidgetItem(["", warning]))
-            self.tree.addTopLevelItem(item)
-            item.setExpanded(True)
+            eintrag.setFont(0, font)
+            for warnung in plan.warnings:
+                eintrag.addChild(QTreeWidgetItem(["", warnung]))
+            self.tree.addTopLevelItem(eintrag)
+            eintrag.setExpanded(True)
 
         self.completeChanged.emit()
+
+    def _verdict_rolle(self, rolle: str) -> None:
+        self.verdict.setProperty("rolle", rolle)
+        self.verdict.style().unpolish(self.verdict)
+        self.verdict.style().polish(self.verdict)
 
     def plan(self) -> BuildPlan | None:
         return self._plan
@@ -180,7 +180,7 @@ class SummaryPage(CatalogPageBase):
         """Das zuletzt erzeugte archiso-Profil, falls erzeugbar."""
         return self._profile
 
-    def _refresh_files(self) -> None:
+    def _dateien_zeigen(self) -> None:
         """Erzeugt den Profilbaum im Speicher und zeigt ihn an.
 
         Bewusst ohne etwas zu schreiben: der Benutzer soll sehen koennen, was
@@ -188,6 +188,7 @@ class SummaryPage(CatalogPageBase):
         """
         from ...core.archiso import ProfileGenerator
 
+        p = tokens().palette
         self.files.clear()
         self._profile = None
         self._profile_error = ""
@@ -195,12 +196,15 @@ class SummaryPage(CatalogPageBase):
         resolution = self.store.resolution()
         if not resolution.is_valid:
             self.files.addTopLevelItem(
-                QTreeWidgetItem(["Die Konfiguration ist noch nicht vollstaendig.", "", "", ""])
+                QTreeWidgetItem(
+                    ["Die Konfiguration ist noch nicht vollstaendig.", "", "", ""]
+                )
             )
+            self.set_local_issues(())
             return
 
         try:
-            profile = ProfileGenerator(
+            profil = ProfileGenerator(
                 self.store.catalog, self.store.config, resolution, self.store.secrets
             ).generate()
         except ProfileError as exc:
@@ -211,53 +215,52 @@ class SummaryPage(CatalogPageBase):
             log.warning("Profil nicht erzeugbar: %s", exc.technical or exc.user_message)
             self._profile_error = exc.user_message
             self.files.addTopLevelItem(QTreeWidgetItem([exc.user_message, "", "", ""]))
-            self._show_profile_error()
+            self._profilfehler_melden()
             self.completeChanged.emit()
             return
 
-        self._profile = profile
-        for path in profile.tree.paths():
-            link = profile.tree.symlink(path)
-            if link is not None:
-                item = QTreeWidgetItem([path, "Verknuepfung", "", link.origin])
-                item.setToolTip(0, f"zeigt auf {link.target}")
-                item.setForeground(1, brush(theme.accent()))
+        self.set_local_issues(())
+        self._profile = profil
+        for pfad in profil.tree.paths():
+            verweis = profil.tree.symlink(pfad)
+            if verweis is not None:
+                eintrag = QTreeWidgetItem([pfad, "Verknuepfung", "", verweis.origin])
+                eintrag.setToolTip(0, f"zeigt auf {verweis.target}")
+                eintrag.setForeground(1, brush(p.accent))
             else:
-                entry = profile.tree.files[path]
-                item = QTreeWidgetItem(
-                    # theme.format_size() gibt es dafuer; hier standen die
-                    # Groessen als rohe Bytezahl, was bei 3 MB unlesbar wird.
-                    [path, "Datei", theme.format_size(entry.size) or f"{entry.size} B",
-                     entry.origin]
+                datei = profil.tree.files[pfad]
+                eintrag = QTreeWidgetItem(
+                    [
+                        pfad,
+                        "Datei",
+                        format_size(datei.size) or f"{datei.size} B",
+                        datei.origin,
+                    ]
                 )
-            self.files.addTopLevelItem(item)
+            self.files.addTopLevelItem(eintrag)
 
-        summary = QTreeWidgetItem([f"-- {profile.tree.describe()} --", "", "", ""])
-        font = summary.font(0)
+        summe = QTreeWidgetItem([f"-- {profil.tree.describe()} --", "", "", ""])
+        font = summe.font(0)
         font.setBold(True)
-        summary.setFont(0, font)
-        self.files.addTopLevelItem(summary)
+        summe.setFont(0, font)
+        self.files.addTopLevelItem(summe)
 
-    def _copy(self) -> None:
+    def _kopieren(self) -> None:
         if self._plan is None:
             return
         # Der gemeinsame Helfer setzt die Beschriftung nach kurzer Zeit zurueck.
-        # Vorher blieb sie dauerhaft auf "Kopiert" stehen -- wer ein zweites Mal
-        # kopierte, sah nicht, ob der Klick ankam.
         copy_to_clipboard(plan_as_text(self._plan), self.copy_button)
 
-    def isComplete(self) -> bool:
+    def is_complete(self) -> bool:
         return (
             self._plan is not None
             and self._plan.resolution.is_valid
             and not self._profile_error
         )
 
-    def _show_profile_error(self) -> None:
+    def _profilfehler_melden(self) -> None:
         """Die Meldung dorthin bringen, wo der Benutzer hinsieht."""
-        from ...core.resolver import Issue
-
-        self.banner.set_issues(
+        self.set_local_issues(
             (
                 Issue(
                     severity="error",
@@ -272,4 +275,4 @@ class SummaryPage(CatalogPageBase):
         )
 
 
-
+__all__ = ["SummaryPage"]

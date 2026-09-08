@@ -32,7 +32,8 @@ from PySide6.QtWidgets import (
 )
 
 from ...core.build import wsl
-from .. import theme
+from ..design import tokens
+from ..design.typo import mono
 from .common import copy_to_clipboard
 
 log = logging.getLogger(__name__)
@@ -288,21 +289,21 @@ class WslSetupDialog(QDialog):
         body = QLabel(text)
         body.setWordWrap(True)
         body.setTextFormat(Qt.TextFormat.RichText)
-        body.setStyleSheet(f"color: {theme.muted()};")
+        body.setProperty("rolle", "gedaempft")
         self._steps.addWidget(body)
 
         if command:
             row = QHBoxLayout()
             field = QPlainTextEdit(command)
             field.setReadOnly(True)
-            field.setFont(theme.mono_font())
+            field.setFont(mono())
             # Eine Zeile Monospace -- gemessen statt geraten: bei 125 %
             # Schriftskalierung brach die feste Hoehe von 34 px um.
             field.setMinimumHeight(
-                field.fontMetrics().lineSpacing() + theme.SPACE_LG
+                field.fontMetrics().lineSpacing() + tokens().space.lg
             )
             field.setMaximumHeight(
-                field.fontMetrics().lineSpacing() * 3 + theme.SPACE_LG
+                field.fontMetrics().lineSpacing() * 3 + tokens().space.lg
             )
             row.addWidget(field, 1)
 
