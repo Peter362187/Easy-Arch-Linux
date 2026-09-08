@@ -35,6 +35,44 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Keine Paketdaten laden -- Namen gelten dann als nicht pruefbar",
     )
+    parser.add_argument(
+        "--build",
+        metavar="PROFIL",
+        help="ISO ohne Oberflaeche bauen (Fortschritt auf stderr)",
+    )
+    parser.add_argument(
+        "--out-dir", metavar="ORDNER", help="Ausgabeverzeichnis fuer --build"
+    )
+    parser.add_argument(
+        "--work-dir", metavar="ORDNER", help="Arbeitsverzeichnis fuer --build"
+    )
+    parser.add_argument(
+        "--target",
+        choices=["auto", "lokal", "wsl", "container"],
+        default="auto",
+        help="Bauweg erzwingen (Vorgabe: der beste verfuegbare)",
+    )
+    parser.add_argument(
+        "--keep-work-dir",
+        action="store_true",
+        help="Arbeitsverzeichnis nach dem Bau behalten (zur Fehlersuche)",
+    )
+    parser.add_argument(
+        "--password-stdin",
+        action="store_true",
+        help="Benutzerpasswort von der Standardeingabe lesen (nie als Argument)",
+    )
+    parser.add_argument(
+        "--verify-iso",
+        metavar="DATEI",
+        help="Eine vorhandene ISO auf Plausibilitaet pruefen",
+    )
+    parser.add_argument(
+        "--history", action="store_true", help="Frueher gebaute ISOs auflisten"
+    )
+    parser.add_argument(
+        "--clear-history", action="store_true", help="Die Bauhistorie loeschen"
+    )
     parser.add_argument("-v", "--verbose", action="store_true", help="Ausfuehrliche Ausgabe")
     parser.add_argument("--no-log-file", action="store_true", help="Nicht in eine Datei protokollieren")
     return parser.parse_args(argv)
@@ -49,6 +87,26 @@ def main(argv: list[str] | None = None) -> int:
     if args.export_profile and args.dry_run:
         print(
             "Fehler: --export-profile und --dry-run schliessen sich aus",
+            file=sys.stderr,
+        )
+        return 2
+
+    # Die Bau-Argumente ohne --build sind fast immer ein Vertipper -- und ein
+    # stillschweigend ignoriertes --out-dir waere die aergerlichste Sorte
+    # davon: die ISO landet dann nach einer halben Stunde woanders.
+    nur_mit_build = [
+        name
+        for name, gesetzt in (
+            ("--out-dir", args.out_dir),
+            ("--work-dir", args.work_dir),
+            ("--keep-work-dir", args.keep_work_dir),
+            ("--password-stdin", args.password_stdin),
+        )
+        if gesetzt
+    ]
+    if nur_mit_build and not args.build:
+        print(
+            f"Fehler: {', '.join(nur_mit_build)} ergibt nur zusammen mit --build Sinn",
             file=sys.stderr,
         )
         return 2
@@ -73,6 +131,29 @@ def main(argv: list[str] | None = None) -> int:
         if environment.install_hint():
             print(f"\nInstallieren mit:\n  {environment.install_hint()}")
         return 0 if environment.can_build else 1
+
+    if args.verify_iso:
+        from .cli_build import verify
+
+        return verify(Path(args.verify_iso))
+
+    if args.history or args.clear_history:
+        from .cli_build import historie
+
+        return historie(leeren=args.clear_history)
+
+    if args.build:
+        from .cli_build import build
+
+        return build(
+            Path(args.build),
+            out_dir=Path(args.out_dir) if args.out_dir else None,
+            work_dir=Path(args.work_dir) if args.work_dir else None,
+            ziel=args.target,
+            keep_work_dir=args.keep_work_dir,
+            password_stdin=args.password_stdin,
+            ausfuehrlich=args.verbose,
+        )
 
     if args.export_profile:
         if not args.out:

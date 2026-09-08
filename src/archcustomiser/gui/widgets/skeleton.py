@@ -12,11 +12,11 @@ einer verdeckten Seite, der weiterschimmert, waere Leerlauflast.
 from __future__ import annotations
 
 from PySide6.QtCore import QRectF, Qt, QTimer
-from PySide6.QtGui import QColor, QLinearGradient, QPainter
+from PySide6.QtGui import QLinearGradient, QPainter
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
 from .. import motion
-from ..design import mit_alpha, tokens
+from ..design import qfarbe, tokens
 
 
 class SkeletonRows(QWidget):
@@ -63,8 +63,8 @@ class SkeletonRows(QWidget):
             kasten = QRectF(0, oben, breite, hoehe)
 
             verlauf = QLinearGradient(kasten.left(), 0, kasten.right(), 0)
-            ruhe = QColor(mit_alpha(p.text_subtle, 0.16))
-            hell = QColor(mit_alpha(p.text_subtle, 0.30))
+            ruhe = qfarbe(p.text_subtle, 0.16)
+            hell = qfarbe(p.text_subtle, 0.30)
             mitte = (self._phase + i * 0.08) % 1.0
             verlauf.setColorAt(0.0, ruhe)
             verlauf.setColorAt(max(0.0, mitte - 0.12), ruhe)

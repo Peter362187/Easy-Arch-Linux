@@ -21,7 +21,7 @@ from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFontMetricsF, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
-from ..design import mit_alpha, tokens
+from ..design import qfarbe, tokens
 from ..design.typo import BODY, CAPTION, SUBTITLE, schrift
 from ..navigation import Art, NavigationModel, Status
 
@@ -159,7 +159,7 @@ class StepSidebar(QWidget):
             4.0,
         )
         maler.setPen(Qt.PenStyle.NoPen)
-        maler.setBrush(QColor(mit_alpha(p.text_subtle, 0.22)))
+        maler.setBrush(qfarbe(p.text_subtle, 0.22))
         maler.drawRoundedRect(balken, 2, 2)
         if gesamt:
             gefuellt = QRectF(balken)
@@ -174,11 +174,11 @@ class StepSidebar(QWidget):
 
         if zustand is Status.AKTUELL:
             maler.setPen(Qt.PenStyle.NoPen)
-            maler.setBrush(QColor(mit_alpha(p.accent, 0.16)))
+            maler.setBrush(qfarbe(p.accent, 0.16))
             maler.drawRoundedRect(zeile, werte.radius.md, werte.radius.md)
         elif schritt.id == self._unter_maus:
             maler.setPen(Qt.PenStyle.NoPen)
-            maler.setBrush(QColor(mit_alpha(p.text_subtle, 0.10)))
+            maler.setBrush(qfarbe(p.text_subtle, 0.10))
             maler.drawRoundedRect(zeile, werte.radius.md, werte.radius.md)
 
         farbe = {

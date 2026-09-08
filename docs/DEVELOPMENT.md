@@ -160,42 +160,138 @@ gehört in die Live-Sitzung, nicht in die archinstall-Dienstliste.
 
 ---
 
-## Warum QWizard und nicht QStackedWidget
+## Warum eine eigene Navigation und kein QWizard
 
-* `nextId()` plus der interne Seitenverlauf erledigen das Überspringen
-  unsichtbarer Kategorien und das korrekte Zurückblättern. Ein Eigenbau müsste
-  den Verlaufsstapel samt Randfällen nachbilden — geschätzt 200 Zeilen reine
-  Navigationslogik ohne funktionalen Gewinn.
-* `isComplete()` und `validatePage()` sind zwei vorhandene, semantisch
-  verschiedene Prüfebenen: die eine sperrt den Weiter-Knopf live, die andere
-  prüft beim Verlassen.
-* `IndependentPages` verhindert, dass Qt beim Zurückblättern Eingaben
-  zurücksetzt — der Store ist die Quelle der Wahrheit, nicht die Seite.
+Bis September 2026 trug `QWizard` die Navigation. Das hat lange getragen, hatte
+aber drei Einschränkungen, die sich nicht wegkonfigurieren ließen:
 
-Bewusst **nicht** benutzt: `registerField()`. Die API ist auf statisch
-deklarierte Widgets zugeschnitten und für dynamisch erzeugte Checkbox-Mengen
-unbrauchbar.
+* **Seiten durften zur Laufzeit nicht kommen oder gehen.** Der interne
+  Seitenstapel zerfällt sonst. Unsichtbare Kategorien wurden deshalb nur in
+  `nextId()` übersprungen — in der Schrittliste standen sie unverändert da. Wer
+  keine grafische Sitzung gewählt hatte, wartete auf „Grafiktreiber", die nie
+  kam.
+* **Ein Sprung musste sich durch alle Zwischenseiten klicken**, mit deren
+  Prüfungen und Dateidialogen. Blieb er unterwegs stecken, landete der Benutzer
+  irgendwo, ohne Erklärung.
+* **Vorwärtsspringen war gar nicht möglich.** Anklickbar waren nur besuchte und
+  fehlerhafte Schritte — obwohl die Seiten ihren Inhalt ohnehin aus dem Store
+  holen und ein Sprung deshalb gefahrlos ist.
 
-**Absicherung:** Der Seiteninhalt lebt in gewöhnlichen `QWidget`s. Sollte später
-eine freie Sprungnavigation nötig werden, bleibt der Umbau lokal.
+Die Navigation ist jetzt ein eigenes Modell in `gui/navigation.py`. Es enthält
+**kein Qt** und kennt die Seiten nur über drei Rückrufe:
 
-Seiten werden zur Laufzeit **nie** hinzugefügt oder entfernt — das würde den
-Seitenverlauf zerstören. Nicht zutreffende Seiten werden in `nextId()`
-übersprungen.
+| Rückruf | Frage |
+|---|---|
+| `ist_anwendbar(category)` | Kommt dieser Schritt unter der aktuellen Auswahl überhaupt vor? |
+| `hat_fehler(step_id)` | Hat er blockierende Meldungen (Store-Issues plus `page.local_issues()`)? |
+| `ist_baubereit()` | Darf der Bauschritt betreten werden? |
+
+Damit sind die Regeln ohne Bildschirm prüfbar — `tests/test_navigation.py`
+kommt ohne `QApplication` aus. Das Fenster (`gui/main_window.py`) ist der Teil,
+der Widgets kennt: es setzt die Rückrufe, zeichnet die Schrittliste und schaltet
+den Seitenstapel um.
+
+Zustände eines Schrittes: `AKTUELL`, `UEBERSPRUNGEN`, `FEHLER`, `ERLEDIGT`,
+`GESPERRT`, `OFFEN` — in dieser Prüfreihenfolge. Der Fortschritt zählt nur
+anwendbare Kategorien; Start- und Bauschritt zählen nicht mit.
+
+**Der Bau ist ein Schritt, kein Dialog.** Solange er läuft, ist `locked` gesetzt
+und nur der Bauschritt anklickbar. Das ersetzt den alten `BuildDialog`, bei dem
+Escape das Fenster schloss, während der Bau unsichtbar weiterlief.
+
+---
+
+## Das Designsystem
+
+Vorher standen Farben, Abstände und Schriftgrößen an rund zwanzig
+`setStyleSheet`-Aufrufen verteilt; `font-size: 11px` kam neunmal wörtlich vor.
+Heute steht jeder Wert genau einmal in `gui/design/tokens.py`, und jede
+Zeichenroutine liest ihn von dort.
+
+* `tokens.py` — `Palette`, `Spacing`, `Radius`; dazu die Farbrechnung
+  (`heller`, `luminanz`, `kontrast`, `lesbare_schrift`, `mit_alpha`). Die
+  Akzentfarbe ist frei wählbar; Hover, gedrückter Zustand, die Schriftfarbe
+  darauf und die weiche Füllung dahinter werden **gerechnet**, nicht gepflegt.
+* `qss.py` — erzeugt das Stylesheet aus den Werten.
+* `theme.py` — `ThemeManager`: Palette und Stylesheet setzen, Icon-Cache leeren,
+  Überblendung. Dunkel ist die Vorgabe; beide Paletten sind gegen WCAG AA
+  (4,5:1 für Fließtext) geprüft, und der Test dafür rechnet mit derselben
+  `kontrast()`-Funktion.
+* `typo.py` — Schriftstufen **relativ** zur Systemschrift (caption −1, body 0,
+  subtitle +1, title +3, display +8), dazu `format_size()` und `mono()`.
+
+Zwei Regeln, die den Rest zusammenhalten: **kein `setStyleSheet` außerhalb von
+`gui/design/`**, und **kein `QGraphicsEffect`** außer dem einen
+`QGraphicsOpacityEffect` auf dem Schnappschuss beim Erscheinungswechsel.
+Effekte erzwingen einen Umweg über eine Zwischenebene und kosten bei jedem
+Neuzeichnen.
+
+---
+
+## Bewegung ohne Leerlauf
+
+`gui/motion.py` ist die einzige Stelle, an der animiert wird.
+
+```python
+motion.animate(karte, von=0.0, bis=1.0, dauer=motion.NORMAL, setzen=karte._setze_hover)
+```
+
+Bewusst über einen Rückruf statt über eine Qt-Eigenschaft: die Widgets zeichnen
+sich selbst und brauchen dafür keine registrierten Properties — nur einen Wert
+und ein `update()`.
+
+`duration()` gibt **0** zurück, wenn Bewegungen reduziert sind (Systemeinstellung
+oder eigener Schalter), offscreen gezeichnet wird oder `ARCHCUSTOMISER_MOTION=off`
+gesetzt ist. Bei 0 setzt `animate()` den Endwert synchron und meldet sofort
+fertig — Tests prüfen damit Endzustände, ohne auf Frames zu warten.
+
+`motion.active_count()` zählt die laufenden Animationen. Der Test
+„nichts animiert im Leerlauf" prüft, dass diese Zahl nach `show()` null ist.
+Wiederholende Timer (Spinner, Schimmer) hängen an `showEvent`/`hideEvent`; die
+Bau-Uhr läuft nur, solange gebaut wird.
+
+---
+
+## Vorschauen kommen aus dem Katalog
+
+Eine Kategorie bekommt über den YAML-Schlüssel `preview` einen Namen, ein Feld
+über `preview_role` eine Rolle. Die Oberfläche sucht in `gui/previews/registry.py`
+nach diesem Namen — steht dort nichts oder ist nichts registriert, gibt es
+einfach keine Vorschau. Kein Fehler, kein Sonderfall.
+
+```yaml
+# data/catalog/categories/85-branding.yaml
+preview: "iso_branding"
+fields:
+  - id: splash
+    preview_role: "splash"
+```
+
+Die Vorschau fragt nach der **Rolle**, nie nach dem Feldnamen:
+
+```python
+kontext.text("splash")     # nicht config.field("branding.splash")
+```
+
+Heißt das Feld eines Tages anders, ändert sich am Vorschaucode nichts. Dasselbe
+Muster benutzen `choices_from` (`core/choices.py`) und `validator`
+(`core/validation.py`) schon im Kern.
 
 ---
 
 ## Signalfluss
 
 ```
-OptionWidget.toggled
-  -> CatalogSelectionPage._on_option_toggled
+OptionCard.toggled
+  -> CatalogSelectionPage._umgeschaltet
   -> SelectionStore.toggle
        [BuildConfig ändern, Resolver aufrufen, Resolution zwischenspeichern]
   -> selectionChanged + resolutionChanged + issuesChanged
-       -> Seiten zeichnen sich neu (mit QSignalBlocker)
+       -> Seiten zeichnen sich neu (mit blockSignals)
        -> completeChanged  (Weiter-Knopf)
-       -> Schrittliste markiert Fehler
+       -> MainWindow._aktualisieren
+            -> NavigationModel.statuses()  (Schrittliste, Fortschritt)
+            -> IsoPanel (50 ms verzögert)
 ```
 
 Schleifenschutz doppelt: `QSignalBlocker` beim programmatischen Setzen und ein

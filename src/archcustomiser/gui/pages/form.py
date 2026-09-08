@@ -49,6 +49,8 @@ log = logging.getLogger(__name__)
 VALIDATION_DELAY_MS = 250
 # Unter dieser Fensterbreite steht die Vorschau ueber statt neben dem Formular.
 SCHMAL_AB = 1100
+# So breit braucht die Vorschau mindestens, damit ein Bootmenue erkennbar ist.
+VORSCHAU_BREITE = 320
 
 
 class CatalogFormPage(PageBase):
@@ -113,6 +115,10 @@ class CatalogFormPage(PageBase):
         self._splitter.setStretchFactor(0, 3)
         self._splitter.setStretchFactor(1, 2)
         self._splitter.setChildrenCollapsible(False)
+        # Ohne Anfangsgroessen verteilt der Splitter nach sizeHint, und die
+        # Vorschau -- die sich selbst zeichnet und deshalb einen kleinen
+        # sizeHint hat -- blieb auf sechzig Pixel zusammengedrueckt.
+        self._splitter.setSizes([620, VORSCHAU_BREITE])
         self._root.addWidget(self._splitter, 1)
 
     def _vorschau_erzeugen(self) -> QWidget | None:

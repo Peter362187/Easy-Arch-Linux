@@ -88,6 +88,20 @@ def bericht(ok: bool = True):
     return PreflightReport(checks=checks, estimated_work_gb=30.0)
 
 
+@pytest.fixture(autouse=True)
+def eigene_historie(tmp_path, monkeypatch):
+    """Kein Test hinterlaesst Eintraege fuer den naechsten.
+
+    Die Bauseite schreibt am Ende einen Historieneintrag. Ohne diese Umlenkung
+    landet er im gemeinsamen Zustandsverzeichnis der Testsitzung -- und ein
+    spaeterer Test, der "noch nichts gebaut" erwartet, faellt darueber.
+    """
+    from archcustomiser.core import history
+
+    monkeypatch.setattr(history, "state_dir", lambda: tmp_path / "zustand")
+    return tmp_path / "zustand"
+
+
 @pytest.fixture
 def page(qapp, store, tmp_path):
     from archcustomiser.gui.pages.build import BuildPage
@@ -369,3 +383,70 @@ def test_starting_over_clears_the_dynamic_phases(page, tmp_path) -> None:
 
     page._zuruecksetzen()
     assert not any(k.startswith("mkarchiso:") for k in page._phasen)
+
+
+# ---------------------------------------------------------------------------
+# Was nach dem Bau passiert
+# ---------------------------------------------------------------------------
+
+
+def test_a_finished_build_is_checked_for_plausibility(page, tmp_path) -> None:
+    """Rueckgabewert 0 von mkarchiso ist kein Beweis fuer eine brauchbare ISO."""
+    from .test_verify import baue_iso
+
+    job = vorbereiten(page, tmp_path)
+    page._bau_starten()
+    job.busy = False
+
+    ausgang = ergebnis(tmp_path)
+    baue_iso(ausgang.iso_path)
+    job.finished.emit(ausgang, "abc")
+    assert page.zeile_pruefung._wert.text() == "plausibel"
+
+
+def test_an_implausible_image_says_so(page, tmp_path) -> None:
+    job = vorbereiten(page, tmp_path)
+    page._bau_starten()
+    job.busy = False
+
+    ausgang = ergebnis(tmp_path)          # nur 4096 Byte -- viel zu klein
+    job.finished.emit(ausgang, "abc")
+    assert page.zeile_pruefung._wert.text() == "auffaellig"
+    assert "auffaellig" in page.ergebnis_titel.text()
+    assert page.ergebnis_hinweise.text()
+
+
+def test_a_finished_build_lands_in_the_history(page, tmp_path, monkeypatch) -> None:
+    from archcustomiser.core import history
+
+    monkeypatch.setattr(history, "state_dir", lambda: tmp_path / "zustand")
+
+    job = vorbereiten(page, tmp_path)
+    page._bau_starten()
+    job.busy = False
+    job.finished.emit(ergebnis(tmp_path), "deadbeef")
+
+    eintraege = history.lies()
+    assert len(eintraege) == 1
+    assert eintraege[0].iso_name == "arch.iso"
+    assert eintraege[0].sha256 == "deadbeef"
+    assert eintraege[0].bauweg == "Testweg"
+
+
+def test_the_history_entry_holds_no_secret(page, tmp_path, monkeypatch) -> None:
+    """Passwoerter verlassen den SecretStore nicht -- auch nicht hierhin."""
+    import json
+
+    from archcustomiser.core import history
+
+    monkeypatch.setattr(history, "state_dir", lambda: tmp_path / "zustand")
+    page.store.set_secret("user.password", "hunter2-geheim")
+
+    job = vorbereiten(page, tmp_path)
+    page._bau_starten()
+    job.busy = False
+    job.finished.emit(ergebnis(tmp_path), "abc")
+
+    datei = next((tmp_path / "zustand" / "builds").glob("*.json"))
+    assert "hunter2" not in datei.read_text(encoding="utf-8")
+    assert "password" not in json.loads(datei.read_text(encoding="utf-8"))

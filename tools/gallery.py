@@ -35,6 +35,50 @@ BREITE = 1280
 HOEHE = 820
 
 
+# Wo die Systemschriften liegen. Das offscreen-Plugin von Qt bringt keine
+# Schriftdatenbank mit -- unter Windows meldet ``QFontDatabase.families()``
+# schlicht null Familien, und jedes Zeichen wird als leeres Kaestchen
+# gezeichnet. Fuer Bildschirmfotos ist das wertlos, also wird eine Schrift von
+# Hand nachgeladen.
+SCHRIFTKANDIDATEN = (
+    "C:/Windows/Fonts/segoeui.ttf",
+    "C:/Windows/Fonts/arial.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/TTF/DejaVuSans.ttf",
+    "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",
+    "/System/Library/Fonts/Supplemental/Arial.ttf",
+)
+MONOKANDIDATEN = (
+    "C:/Windows/Fonts/consola.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+    "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
+    "/System/Library/Fonts/Menlo.ttc",
+)
+
+
+def _schrift_sicherstellen(app) -> str:
+    """Sorgt dafuer, dass ueberhaupt eine Schrift da ist."""
+    from PySide6.QtGui import QFont, QFontDatabase
+
+    if QFontDatabase.families():
+        return app.font().family()
+
+    geladen = ""
+    for kandidat in SCHRIFTKANDIDATEN + MONOKANDIDATEN:
+        datei = Path(kandidat)
+        if not datei.is_file():
+            continue
+        kennung = QFontDatabase.addApplicationFont(str(datei))
+        if kennung < 0:
+            continue
+        familien = QFontDatabase.applicationFontFamilies(kennung)
+        if familien and not geladen:
+            geladen = familien[0]
+    if geladen:
+        app.setFont(QFont(geladen, 9))
+    return geladen or "(keine)"
+
+
 def _fenster(dunkel: bool, tmp: Path):
     from PySide6.QtCore import QSettings
 
@@ -93,6 +137,7 @@ def erzeuge(ziel: Path, erscheinungen: list[str]) -> list[Path]:
 
     app = QApplication.instance() or QApplication([])
     app.setStyle("Fusion")
+    print(f"Schrift: {_schrift_sicherstellen(app)}")
 
     ziel.mkdir(parents=True, exist_ok=True)
     gemacht: list[Path] = []

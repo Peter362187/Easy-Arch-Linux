@@ -7,6 +7,7 @@ braucht, liest sie ueber ``tokens()``; wer eine Bewegung braucht, geht ueber
 
 from __future__ import annotations
 
+from .farben import qfarbe
 from .theme import ThemeManager, tokens
 from .tokens import (
     Palette,
@@ -28,6 +29,7 @@ __all__ = [
     "kontrast",
     "lesbare_schrift",
     "mit_alpha",
+    "qfarbe",
     "tokens",
     "tokens_for",
 ]

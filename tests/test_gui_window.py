@@ -102,6 +102,31 @@ def window(qapp, catalog, store, settings, theme, paketdienst):
     qapp.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
+def _fenster(qapp, catalog, settings, theme, paketdienst):
+    """Ein weiteres Fenster fuer Tests, die nicht die Fixture nehmen koennen."""
+    from archcustomiser.core.profiles import ProfileService
+    from archcustomiser.gui.main_window import MainWindow
+    from archcustomiser.gui.packages_worker import PackageController
+    from archcustomiser.gui.store import SelectionStore
+
+    return MainWindow(
+        catalog,
+        SelectionStore(catalog),
+        PackageController(paketdienst),
+        ProfileService(catalog),
+        settings,
+        theme,
+        None,
+    )
+
+
+def _abraeumen(qapp, fenster) -> None:
+    fenster.hide()
+    fenster.setParent(None)
+    fenster.deleteLater()
+    qapp.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+
 # ---------------------------------------------------------------------------
 # Aufbau
 # ---------------------------------------------------------------------------
@@ -503,3 +528,88 @@ def test_an_unknown_preview_name_is_survivable() -> None:
     from archcustomiser.gui.previews import create
 
     assert create("gibt-es-nicht", None) is None
+
+
+# ---------------------------------------------------------------------------
+# Was frueher gebaut wurde
+# ---------------------------------------------------------------------------
+
+
+def test_without_a_history_the_welcome_page_stays_quiet(
+    qapp, catalog, settings, theme, paketdienst, tmp_path, monkeypatch
+) -> None:
+    """Beim ersten Start gibt es nichts zu zeigen -- und keinen leeren Kasten."""
+    from archcustomiser.core import history
+
+    monkeypatch.setattr(history, "state_dir", lambda: tmp_path / "leer")
+    fenster = _fenster(qapp, catalog, settings, theme, paketdienst)
+    try:
+        assert fenster.welcome.historie is None
+    finally:
+        _abraeumen(qapp, fenster)
+
+
+def test_the_welcome_page_lists_earlier_builds(
+    qapp, catalog, settings, theme, paketdienst, tmp_path, monkeypatch
+) -> None:
+    from archcustomiser.core import history
+
+    monkeypatch.setattr(history, "state_dir", lambda: tmp_path / "zustand")
+    history.merke(
+        history.Bau(
+            iso_name="flos-1.0-x86_64.iso",
+            zeitpunkt="2026-09-01 21:14",
+            groesse_bytes=1311 * 1024 * 1024,
+        )
+    )
+
+    fenster = _fenster(qapp, catalog, settings, theme, paketdienst)
+    try:
+        assert fenster.welcome.historie is not None
+        text = fenster.welcome.historie.text()
+        assert "flos-1.0-x86_64.iso" in text
+        assert "1311 MB" in text
+    finally:
+        _abraeumen(qapp, fenster)
+
+
+# ---------------------------------------------------------------------------
+# AUR
+# ---------------------------------------------------------------------------
+
+
+def test_the_aur_lookup_is_a_button_and_not_automatic(window) -> None:
+    """Die Live-Pruefung darf nicht bei jedem Tastendruck ins Netz gehen."""
+    seite = window._pages["extra_packages"]
+    assert seite.aur_button.isEnabled()
+
+
+def test_the_aur_button_does_nothing_without_packages(window) -> None:
+    seite = window._pages["extra_packages"]
+    seite.editor.setPlainText("")
+    seite._aur_fragen()
+    assert seite.aur_button.isEnabled(), "der Knopf wurde ohne Grund gesperrt"
+
+
+def test_the_aur_button_comes_back_after_a_failure(window) -> None:
+    seite = window._pages["extra_packages"]
+    seite.aur_button.setEnabled(False)
+    seite.controller.aurFailed.emit("kein Netz")
+    assert seite.aur_button.isEnabled()
+    assert "AUR" in seite.status.text()
+
+
+def test_the_live_check_never_asks_the_aur(window, monkeypatch) -> None:
+    seite = window._pages["extra_packages"]
+    gefragt: list[bool] = []
+
+    echte = seite.controller.service.validate
+
+    def beobachtet(namen, *, provider_choices=None, check_aur=None):
+        gefragt.append(bool(check_aur))
+        return echte(namen, provider_choices=provider_choices, check_aur=False)
+
+    monkeypatch.setattr(seite.controller.service, "validate", beobachtet)
+    seite.editor.setPlainText("neovim")
+    seite._pruefen()
+    assert gefragt and not any(gefragt)

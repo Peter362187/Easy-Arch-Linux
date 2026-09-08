@@ -24,6 +24,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, QTime, QTimer, Signal
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QHBoxLayout,
     QLabel,
@@ -37,8 +38,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ...core import history
 from ...core.build import BuildOutcome, PreflightReport, Step
 from ...core.build.errors import BuildFailed, PreflightError
+from ...core.build.verify import pruefe_iso, schreibe_pruefsumme
 from ..build_worker import BuildJob
 from ..design import tokens
 from ..design.typo import CAPTION, SUBTITLE, TITLE, format_size, mono, schrift
@@ -189,7 +192,6 @@ class BuildPage(PageBase):
         layout = QVBoxLayout(seite)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(werte.space.md)
-        layout.addStretch(1)
 
         text = QLabel(
             "Alles steht bereit. Der Bau laeuft auf dem Weg, den dieser Rechner "
@@ -213,7 +215,7 @@ class BuildPage(PageBase):
             "angeboten -- das Ergebnis baut dann ein Arch-System."
         )
         layout.addWidget(self.exporthinweis)
-        layout.addStretch(2)
+        layout.addStretch(1)
         return seite
 
     def _pruefseite(self) -> QWidget:
@@ -318,8 +320,10 @@ class BuildPage(PageBase):
 
         self.zeile_groesse = Wertzeile("Groesse", "")
         self.zeile_dauer = Wertzeile("Dauer", "")
+        self.zeile_pruefung = Wertzeile("Pruefung", "")
         aussen.addWidget(self.zeile_groesse)
         aussen.addWidget(self.zeile_dauer)
+        aussen.addWidget(self.zeile_pruefung)
 
         self.sha_block = CodeBlock("")
         self.sha_titel = HintLabel("SHA-256")
@@ -562,14 +566,74 @@ class BuildPage(PageBase):
         self.sha_block.setVisible(bool(sha256))
         self.sha_speichern.setEnabled(bool(sha256) and pfad is not None)
         self.ordner_button.setEnabled(pfad is not None)
-        self.ergebnis_hinweise.setText(
-            "\n".join(f"- {hinweis}" for hinweis in outcome.warnings)
-        )
+
+        # Rueckgabewert 0 von mkarchiso heisst nicht, dass eine brauchbare ISO
+        # entstanden ist. Ein abgebrochener Kopiervorgang oder eine volle
+        # Platte hinterlassen eine Datei mit dem richtigen Namen und dem
+        # falschen Inhalt -- das faellt sonst erst an dem Rechner auf, der
+        # damit nicht startet.
+        hinweise = list(outcome.warnings)
+        if pfad is not None:
+            befund = pruefe_iso(pfad)
+            self.zeile_pruefung.setze_wert(
+                "plausibel" if befund.plausibel else "auffaellig"
+            )
+            self.zeile_pruefung.setToolTip(befund.zusammenfassung())
+            hinweise.extend(befund.probleme)
+            hinweise.extend(befund.hinweise)
+            if not befund.plausibel:
+                self.ergebnis_titel.setText(f"{pfad.name} ist fertig -- aber auffaellig")
+
+        self.ergebnis_hinweise.setText("\n".join(f"- {hinweis}" for hinweis in hinweise))
         self.ergebnis_hinweise.setProperty("rolle", "warnung")
         self.stapel.setCurrentIndex(SEITE_ERGEBNIS)
         self.erfolgshaken.set_zustand(Zustand.OFFEN, animiert=False)
         QTimer.singleShot(80, lambda: self.erfolgshaken.set_zustand(Zustand.OK))
+
+        self._merke_in_historie(outcome, sha256, groesse)
+        self._benachrichtigen(pfad)
         self.fertig.emit()
+
+    def _merke_in_historie(self, outcome, sha256: str, groesse: int) -> None:
+        """Traegt den Bau in die Historie ein.
+
+        Keine Feldwerte, kein Geheimnis: Name, Groesse, Dauer, Bauweg,
+        Paketzahl, Pruefsumme. Mehr braucht die Frage "was liegt hier
+        eigentlich noch auf der Platte" nicht.
+        """
+        pfad = outcome.iso_path
+        history.merke(
+            history.Bau(
+                iso_name=(
+                    pfad.name if pfad is not None else self.store.config.iso_filename
+                ),
+                zeitpunkt=_jetzt(),
+                groesse_bytes=groesse,
+                dauer_sekunden=_sekunden(self._verstrichen),
+                erfolgreich=True,
+                bauweg=getattr(self.flow, "bauweg", ""),
+                pakete=len(self.store.resolution().package_names),
+                sha256=sha256,
+                iso_pfad=str(pfad) if pfad is not None else "",
+                hinweise=tuple(outcome.warnings),
+            )
+        )
+
+    def _benachrichtigen(self, pfad) -> None:
+        """Bescheid sagen, wenn das Fenster nicht im Vordergrund steht.
+
+        Ein Bau dauert eine halbe Stunde. Niemand sitzt daneben und sieht zu --
+        wer in einem anderen Fenster arbeitet, merkt sonst lange nicht, dass er
+        fertig ist. Ein dauerhaftes Symbol im Infobereich waere der naechste
+        Schritt, aber ein Programm, das man zweimal im Monat startet, gehoert
+        nicht dauerhaft in die Taskleiste.
+        """
+        if self.isActiveWindow():
+            return
+        anwendung = QApplication.instance()
+        if anwendung is not None:
+            anwendung.alert(self.window(), 3000)
+        log.info("Bau fertig: %s", pfad)
 
     def _fehlgeschlagen(self, fehler: object) -> None:
         self._abschliessen()
@@ -689,12 +753,14 @@ class BuildPage(PageBase):
         """
         if not self.sha256 or self.outcome is None or self.outcome.iso_path is None:
             return
-        iso = self.outcome.iso_path
-        ziel = iso.with_suffix(iso.suffix + ".sha256")
-        try:
-            ziel.write_text(f"{self.sha256}  {iso.name}\n", encoding="utf-8")
-        except OSError as exc:
-            QMessageBox.warning(self, "Nicht gespeichert", str(exc))
+        ziel = schreibe_pruefsumme(self.outcome.iso_path, self.sha256)
+        if ziel is None:
+            QMessageBox.warning(
+                self,
+                "Nicht gespeichert",
+                "Die Pruefsumme liess sich nicht neben die ISO legen. "
+                "Einzelheiten stehen im Protokoll.",
+            )
             return
         self.sha_speichern.setText("Gespeichert")
         QTimer.singleShot(
@@ -720,6 +786,17 @@ class BuildPage(PageBase):
         """Ob das Fenster jetzt zugehen darf."""
         job = self.job
         return job is None or not job.busy
+
+
+def _jetzt() -> str:
+    """Der Zeitpunkt in der Schreibweise, nach der die Historie sortiert."""
+    from datetime import datetime
+
+    return datetime.now().strftime("%Y-%m-%d %H:%M")
+
+
+def _sekunden(zeit: QTime) -> float:
+    return zeit.hour() * 3600 + zeit.minute() * 60 + zeit.second()
 
 
 __all__ = ["STEP_LABELS", "BuildPage"]

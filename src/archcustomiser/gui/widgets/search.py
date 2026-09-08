@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..design import mit_alpha, tokens
+from ..design import qfarbe, tokens
 from ..design.typo import CAPTION, schrift
 
 
@@ -79,7 +79,7 @@ class Chip(QWidget):
         flaeche = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
         radius = flaeche.height() / 2
         maler.setBrush(
-            QColor(mit_alpha(p.accent, 0.2)) if self._aktiv else QColor(p.surface_alt)
+            qfarbe(p.accent, 0.2) if self._aktiv else QColor(p.surface_alt)
         )
         maler.drawRoundedRect(flaeche, radius, radius)
 

@@ -16,7 +16,7 @@ from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
 from .. import motion
-from ..design import mit_alpha, tokens
+from ..design import qfarbe, tokens
 
 
 class SmoothProgressBar(QWidget):
@@ -64,7 +64,7 @@ class SmoothProgressBar(QWidget):
 
         flaeche = QRectF(self.rect())
         radius = flaeche.height() / 2
-        maler.setBrush(QColor(mit_alpha(p.text_subtle, 0.25)))
+        maler.setBrush(qfarbe(p.text_subtle, 0.25))
         maler.drawRoundedRect(flaeche, radius, radius)
 
         if self._wert > 0:

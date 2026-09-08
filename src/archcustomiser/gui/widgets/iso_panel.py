@@ -112,7 +112,7 @@ class IsoPanel(QWidget):
         self.dienste = _Abschnitt("Dienste im Live-System")
         self.aur = _Abschnitt("AUR")
         self.eigene = _Abschnitt("Eigene Pakete")
-        self.namen = _Abschnitt("Pakete")
+        self.namen = _Abschnitt("Paketliste")
         self.probleme = _Abschnitt("Offen")
         self.datei = _Abschnitt("Ergebnis")
         for abschnitt in (
@@ -161,7 +161,10 @@ class IsoPanel(QWidget):
             if resolution.estimated_size_mb
             else ""
         )
-        self.kernel.setze(f"linux{resolution.kernel_suffix}")
+        # ``kernel_suffix`` ist bereits der vollstaendige Paketname
+        # ("linux", "linux-zen") -- ein vorangestelltes "linux" ergab
+        # daraus "linuxlinux".
+        self.kernel.setze(resolution.kernel_suffix)
         self.datei.setze(f"{config.iso_filename}\nDatentraeger: {config.iso_label}")
         self.repos.setze(", ".join(resolution.repositories) or "core, extra")
         self.gruppen.setze(", ".join(resolution.package_groups))

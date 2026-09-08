@@ -29,7 +29,7 @@ from PySide6.QtWidgets import QSizePolicy, QWidget
 
 from ...core.catalog import Option, SelectionMode
 from .. import motion
-from ..design import mit_alpha, tokens
+from ..design import qfarbe, tokens
 from ..design.typo import BODY, CAPTION, schrift
 
 
@@ -217,11 +217,11 @@ class OptionCard(QWidget):
 
         if self._auswahl > 0 or self._auto:
             staerke = max(self._auswahl, 0.9 if self._auto else 0.0)
-            maler.setBrush(QColor(mit_alpha(p.accent, 0.14 * staerke)))
+            maler.setBrush(qfarbe(p.accent, 0.14 * staerke))
             maler.drawRoundedRect(flaeche, radius, radius)
 
         if self._hover > 0 and self._verfuegbar and not self._auto:
-            maler.setBrush(QColor(mit_alpha(p.accent, 0.06 * self._hover)))
+            maler.setBrush(qfarbe(p.accent, 0.06 * self._hover))
             maler.drawRoundedRect(flaeche, radius, radius)
 
     def _zeichne_rand(self, maler, flaeche, radius, p) -> QColor:
@@ -349,14 +349,14 @@ class OptionCard(QWidget):
             kasten = QRectF(x - breite, flaeche.top() + werte.space.md, breite, hoehe)
             grund, schriftfarbe = _abzeichenfarben(rolle, p)
             maler.setPen(Qt.PenStyle.NoPen)
-            maler.setBrush(QColor(grund))
+            maler.setBrush(grund)
             maler.drawRoundedRect(kasten, hoehe / 2, hoehe / 2)
             maler.setPen(QColor(schriftfarbe))
             maler.drawText(kasten, int(Qt.AlignmentFlag.AlignCenter), text)
             x -= breite + werte.space.xs
 
 
-def _abzeichenfarben(rolle: str, p) -> tuple[str, str]:
+def _abzeichenfarben(rolle: str, p) -> tuple[QColor, str]:
     """(Hintergrund, Schrift) fuer ein Abzeichen.
 
     Die Schriftfarbe wird gerechnet, nicht gepflegt: weisse Schrift auf hellem
@@ -365,10 +365,10 @@ def _abzeichenfarben(rolle: str, p) -> tuple[str, str]:
     from ..design.tokens import lesbare_schrift
 
     if rolle == "accent":
-        return mit_alpha(p.accent, 0.9), p.accent_text
+        return qfarbe(p.accent, 0.9), p.accent_text
     if rolle == "warn":
-        return mit_alpha(p.warning, 0.9), lesbare_schrift(p.warning)
-    return mit_alpha(p.text_subtle, 0.28), p.text
+        return qfarbe(p.warning, 0.9), lesbare_schrift(p.warning)
+    return qfarbe(p.text_subtle, 0.28), p.text
 
 
 def _teilpfad(pfad: QPainterPath, anteil: float) -> QPainterPath:

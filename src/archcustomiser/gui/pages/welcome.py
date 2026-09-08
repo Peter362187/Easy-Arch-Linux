@@ -21,6 +21,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
     QFileDialog,
+    QLabel,
     QMessageBox,
     QScrollArea,
     QSizePolicy,
@@ -31,7 +32,7 @@ from PySide6.QtWidgets import (
 from ...core.environment import Environment
 from ...core.profiles import ProfileError, ProfileInfo, ProfileService
 from .. import motion
-from ..design import mit_alpha, tokens
+from ..design import qfarbe, tokens
 from ..design.typo import BODY, CAPTION, schrift
 from ..store import SelectionStore
 from ..widgets.common import HeadlineLabel, HintLabel
@@ -129,7 +130,7 @@ class _Auswahlkarte(QWidget):
         maler.setBrush(QColor(grund))
         maler.drawRoundedRect(flaeche, werte.radius.md, werte.radius.md)
         if self._fuellung > 0.01:
-            maler.setBrush(QColor(mit_alpha(p.accent, 0.16 * self._fuellung)))
+            maler.setBrush(qfarbe(p.accent, 0.16 * self._fuellung))
             maler.drawRoundedRect(flaeche, werte.radius.md, werte.radius.md)
 
         randfarbe = QColor(p.accent) if self._fuellung > 0.5 else QColor(p.border)
@@ -209,6 +210,10 @@ class WelcomePage(PageBase):
         rolle.setWidget(inneres)
         self._root.addWidget(rolle, 1)
 
+        self.historie = self._historie_zeigen()
+        if self.historie is not None:
+            self._root.addWidget(self.historie)
+
         self.status = HintLabel(self._umgebungstext())
         self.status.setVisible(bool(self.status.text()))
         self._root.addWidget(self.status)
@@ -246,6 +251,32 @@ class WelcomePage(PageBase):
         karte.gewaehlt.connect(self._setze_gewaehlt)
         self._karten[kennung] = karte
         self._liste.addWidget(karte)
+
+    def _historie_zeigen(self) -> QLabel | None:
+        """Was auf diesem Rechner schon gebaut wurde.
+
+        Ein Bau dauert eine halbe Stunde und erzeugt eine mehrere Gigabyte
+        grosse Datei. Wer das zweimal im Monat macht, weiss nach dem dritten
+        Mal nicht mehr, welche ISO noch auf der Platte liegt und wozu sie
+        gehoerte. Drei Zeilen an dieser Stelle beantworten das.
+        """
+        from ...core import history
+
+        eintraege = history.lies(3)
+        if not eintraege:
+            return None
+        zeilen = []
+        for eintrag in eintraege:
+            rest = "" if eintrag.existiert_noch else "  (Datei geloescht)"
+            zeilen.append(
+                f"{eintrag.zeitpunkt}   {eintrag.iso_name}   "
+                f"{eintrag.groesse_mb} MB{rest}"
+            )
+        label = QLabel("Zuletzt gebaut:\n" + "\n".join(zeilen))
+        label.setFont(schrift(CAPTION))
+        label.setProperty("rolle", "gedaempft")
+        label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        return label
 
     def _umgebungstext(self) -> str:
         if self.environment is None or self.environment.can_build:

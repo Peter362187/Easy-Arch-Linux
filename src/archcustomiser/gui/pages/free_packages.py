@@ -93,6 +93,8 @@ class FreePackagesPage(PageBase):
         # blieb dauerhaft gesperrt.
         self.controller.failed.connect(self._fehlgeschlagen)
         self.controller.statusChanged.connect(self.status.setText)
+        self.controller.aurReady.connect(self._aur_fertig)
+        self.controller.aurFailed.connect(self._aur_fehlgeschlagen)
         self.add_help_link()
 
     def _aufbauen(self) -> None:
@@ -136,6 +138,21 @@ class FreePackagesPage(PageBase):
         self.status.setWordWrap(True)
         fuss.addWidget(self.status, 1)
 
+        # Das AUR ist bewusst ein eigener Knopf und keine stille Erweiterung
+        # der Live-Pruefung: die Abfrage geht ins Netz, sie dauert, und sie
+        # verraet aur.archlinux.org, was jemand gerade tippt. Ein
+        # AUR-Paket landet ausserdem nicht in der ISO -- es muesste vorher
+        # lokal gebaut werden. Deshalb steht das Ergebnis als Hinweis da und
+        # macht die Zeile nicht gruen.
+        self.aur_button = QPushButton("Auch im AUR suchen")
+        self.aur_button.setProperty("variant", "ghost")
+        self.aur_button.setToolTip(
+            "Fragt aur.archlinux.org nach den Namen, die in den offiziellen "
+            "Repositorien fehlen. AUR-Pakete werden nicht mitgebaut."
+        )
+        self.aur_button.clicked.connect(self._aur_fragen)
+        fuss.addWidget(self.aur_button)
+
         self.refresh_button = QPushButton("Paketdaten aktualisieren")
         self.refresh_button.setProperty("variant", "ghost")
         self.refresh_button.clicked.connect(self._aktualisieren)
@@ -166,6 +183,29 @@ class FreePackagesPage(PageBase):
         self.refresh_button.setEnabled(True)
         self._stapel.setCurrentWidget(self.results)
 
+    def _aur_fragen(self) -> None:
+        namen = parse_list(self.editor.toPlainText())
+        if not namen:
+            return
+        self.aur_button.setEnabled(False)
+        self.aur_button.setText("Wird im AUR gesucht ...")
+        self.controller.pruefe_aur(
+            namen, provider_choices=self.store.config.provider_choices
+        )
+
+    def _aur_fertig(self, report: object) -> None:
+        self._aur_zuruecksetzen()
+        if report is not None:
+            self._zeige_report(report)
+
+    def _aur_fehlgeschlagen(self, meldung: str) -> None:
+        self._aur_zuruecksetzen()
+        self.status.setText(f"AUR nicht erreichbar: {meldung}")
+
+    def _aur_zuruecksetzen(self) -> None:
+        self.aur_button.setEnabled(True)
+        self.aur_button.setText("Auch im AUR suchen")
+
     def sync_from_store(self) -> None:
         aktuell = "\n".join(self.store.extra_packages())
         if aktuell != self.editor.toPlainText():
@@ -193,6 +233,12 @@ class FreePackagesPage(PageBase):
         report = self.controller.validate(
             namen, provider_choices=self.store.config.provider_choices
         )
+        self._zeige_report(report)
+
+    def _zeige_report(self, report) -> None:
+        """Zeichnet die Ergebnistabelle -- fuer die Live-Pruefung und fuers AUR."""
+        self.results.clear()
+        self._blocking = 0
         # Ein frei eingegebenes multilib-Paket braucht das Repository in der
         # erzeugten pacman.conf -- der Katalog weiss davon nichts.
         self.store.set_package_report(report)

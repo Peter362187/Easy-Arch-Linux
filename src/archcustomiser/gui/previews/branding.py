@@ -87,6 +87,8 @@ class _Kachel(QWidget):
         self.hinweis = ""
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setMinimumHeight(150)
+        # Schmaler ist eine Bootmenue-Nachbildung nicht mehr aussagekraeftig.
+        self.setMinimumWidth(260)
 
     def _rahmen(self, maler: QPainter) -> QRectF:
         werte = tokens()

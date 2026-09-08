@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from ...core.resolver import Fix, Issue
-from ..design import mit_alpha, tokens
+from ..design import qfarbe, tokens
 from ..design.typo import BODY, schrift
 
 
@@ -72,7 +72,7 @@ class _Zeile(QWidget):
         maler.setPen(Qt.PenStyle.NoPen)
 
         flaeche = QRectF(self.rect())
-        maler.setBrush(QColor(mit_alpha(farbe, 0.12)))
+        maler.setBrush(qfarbe(farbe, 0.12))
         maler.drawRoundedRect(flaeche, werte.radius.md, werte.radius.md)
 
         streifen = QRectF(flaeche.left(), flaeche.top(), 4.0, flaeche.height())
