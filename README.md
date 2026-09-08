@@ -21,6 +21,27 @@ Das Programm baut Arch Linux **nicht nach**. Es ist eine Automatisierungsschicht
 Repositories, `systemd` und `archinstall`. Die Abhängigkeitsauflösung macht
 pacman, nicht dieses Programm.
 
+![Die Auswahlseite für Programme](docs/screenshots/dunkel-apps.png)
+
+Links die Schrittliste mit dem, was schon erledigt ist und was gar nicht
+zutrifft. Rechts durchgehend die Antwort auf „was landet eigentlich in meiner
+ISO". In der Mitte die eigentliche Auswahl.
+
+<details>
+<summary>Mehr Bilder</summary>
+
+| | |
+|---|---|
+| Startseite | ![Startseite](docs/screenshots/dunkel-welcome.png) |
+| Branding mit Live-Vorschau | ![Branding](docs/screenshots/dunkel-branding.png) |
+| Zusammenfassung | ![Zusammenfassung](docs/screenshots/dunkel-summary.png) |
+| Hell statt dunkel | ![Hell](docs/screenshots/hell-apps.png) |
+
+Alle Bilder entstehen offscreen mit `python tools/gallery.py` und lassen sich
+jederzeit neu erzeugen.
+
+</details>
+
 ---
 
 ## Stand der Umsetzung
