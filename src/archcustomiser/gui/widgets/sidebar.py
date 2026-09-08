@@ -24,8 +24,11 @@ from PySide6.QtWidgets import QSizePolicy, QWidget
 from ..design import qfarbe, tokens
 from ..design.typo import BODY, CAPTION, SUBTITLE, schrift
 from ..navigation import Art, NavigationModel, Status
+from .icons import load_icon
 
 ZEILENHOEHE = 34
+# Die Symbole des Katalogs, in Zeilenhoehe.
+SYMBOLGROESSE = 16
 
 
 class StepSidebar(QWidget):
@@ -41,10 +44,19 @@ class StepSidebar(QWidget):
         self._notiz = ""
         self._unter_maus = ""
 
+        self._fokus = ""
+
         self.setMouseTracking(True)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
         self.setMinimumWidth(self._natuerliche_breite())
-        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        # Die Liste ist ein vollwertiges Bedienelement, kein Bild: sie gehoert
+        # in die Tabreihenfolge. Vorher war sie nur mit der Maus erreichbar --
+        # wer die Tastatur benutzt, hatte gar keine Schrittnavigation.
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setAccessibleName("Schritte")
+        self.setAccessibleDescription(
+            "Pfeiltasten waehlen einen Schritt, Eingabetaste springt hin."
+        )
 
     # -- oeffentlich ----------------------------------------------------------
     def aktualisieren(self) -> None:
@@ -53,6 +65,10 @@ class StepSidebar(QWidget):
         self._anklickbar = {
             schritt.id for schritt in self.model.steps if self.model.anklickbar(schritt)
         }
+        if self._fokus and self._fokus not in self._anklickbar:
+            # Der Schritt unter dem Tastaturfokus ist gerade weggefallen.
+            erreichbar = self._erreichbare()
+            self._fokus = erreichbar[0] if erreichbar else ""
         self.update()
 
     def set_notice(self, text: str) -> None:
@@ -75,7 +91,8 @@ class StepSidebar(QWidget):
             default=160.0,
         )
         werte = tokens()
-        return int(breite + 26 + werte.space.lg * 3)
+        # 26 fuer die Zustandsmarke, dazu Platz fuer das Symbol der Kategorie.
+        return int(breite + 26 + SYMBOLGROESSE + werte.space.lg * 3)
 
     def sizeHint(self) -> QSize:
         hoehe = len(self.model.steps) * ZEILENHOEHE + 120
@@ -93,6 +110,59 @@ class StepSidebar(QWidget):
         werte = tokens()
         metrik = QFontMetricsF(schrift(CAPTION))
         return werte.space.xl + metrik.height() + werte.space.lg + 8
+
+    # -- Tastatur -------------------------------------------------------------
+    def _erreichbare(self) -> list[str]:
+        return [
+            schritt.id for schritt in self.model.steps if schritt.id in self._anklickbar
+        ]
+
+    def focusInEvent(self, event) -> None:
+        if not self._fokus:
+            erreichbar = self._erreichbare()
+            self._fokus = self.model.current_id if self.model.current_id in erreichbar else (
+                erreichbar[0] if erreichbar else ""
+            )
+        self.update()
+        super().focusInEvent(event)
+
+    def focusOutEvent(self, event) -> None:
+        self.update()
+        super().focusOutEvent(event)
+
+    def keyPressEvent(self, event) -> None:
+        erreichbar = self._erreichbare()
+        if not erreichbar:
+            super().keyPressEvent(event)
+            return
+
+        taste = event.key()
+        if taste in (Qt.Key.Key_Down, Qt.Key.Key_Up):
+            richtung = 1 if taste == Qt.Key.Key_Down else -1
+            wo = erreichbar.index(self._fokus) if self._fokus in erreichbar else 0
+            # Uebersprungene und gesperrte Schritte kommen in ``erreichbar``
+            # gar nicht vor -- die Pfeiltasten gehen also von selbst darueber
+            # hinweg, genau wie der Weiter-Knopf.
+            self._fokus = erreichbar[max(0, min(len(erreichbar) - 1, wo + richtung))]
+            self.update()
+            event.accept()
+            return
+        if taste == Qt.Key.Key_Home:
+            self._fokus = erreichbar[0]
+            self.update()
+            event.accept()
+            return
+        if taste == Qt.Key.Key_End:
+            self._fokus = erreichbar[-1]
+            self.update()
+            event.accept()
+            return
+        if taste in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
+            if self._fokus:
+                self.stepClicked.emit(self._fokus)
+                event.accept()
+                return
+        super().keyPressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:
         step_id = self._schritt_bei(event.position().y())
@@ -131,7 +201,13 @@ class StepSidebar(QWidget):
         self._zeichne_fortschritt(maler, werte, p)
 
         oben = self._listenanfang()
-        for nummer, schritt in enumerate(self.model.steps, start=1):
+        # Gezaehlt werden nur die Kategorien. Der Startschritt traegt keine
+        # Nummer -- aus ``enumerate`` ueber alle Schritte wurde sonst
+        # "2. Grundkonfiguration" fuer den ersten Schritt, den man einstellt.
+        nummer = 0
+        for schritt in self.model.steps:
+            if schritt.art is Art.CATEGORY:
+                nummer += 1
             zustand = self._zustaende.get(schritt.id, Status.OFFEN)
             self._zeichne_zeile(maler, werte, p, schritt, nummer, oben, zustand)
             oben += ZEILENHOEHE
@@ -181,6 +257,13 @@ class StepSidebar(QWidget):
             maler.setBrush(qfarbe(p.text_subtle, 0.10))
             maler.drawRoundedRect(zeile, werte.radius.md, werte.radius.md)
 
+        if self.hasFocus() and schritt.id == self._fokus:
+            maler.setBrush(Qt.BrushStyle.NoBrush)
+            maler.setPen(QPen(QColor(p.accent), 2.0))
+            maler.drawRoundedRect(
+                zeile.adjusted(1, 1, -1, -1), werte.radius.md, werte.radius.md
+            )
+
         farbe = {
             Status.AKTUELL: p.text,
             Status.ERLEDIGT: p.success,
@@ -192,12 +275,26 @@ class StepSidebar(QWidget):
 
         self._zeichne_marke(maler, werte, p, zeile, zustand, farbe)
 
+        # Das Symbol der Kategorie -- der Katalog vergibt es, die alte
+        # Schrittliste zeigte es, und beim Umbau ging es zunaechst verloren.
+        links = zeile.left() + 26 + werte.space.sm
+        symbol = load_icon(schritt.icon, farbe, SYMBOLGROESSE) if schritt.icon else None
+        if symbol is not None:
+            kasten = QRectF(
+                links,
+                zeile.center().y() - SYMBOLGROESSE / 2,
+                float(SYMBOLGROESSE),
+                float(SYMBOLGROESSE),
+            )
+            symbol.paint(maler, kasten.toRect(), Qt.AlignmentFlag.AlignCenter)
+            links += SYMBOLGROESSE + werte.space.xs
+
         maler.setFont(schrift(BODY, fett=zustand is Status.AKTUELL))
         maler.setPen(QColor(farbe))
         textkasten = QRectF(
-            zeile.left() + 26 + werte.space.sm,
+            links,
             zeile.top(),
-            zeile.width() - 26 - werte.space.sm * 2,
+            zeile.right() - links - werte.space.sm,
             zeile.height(),
         )
         beschriftung = f"{nummer}. {schritt.titel}" if schritt.art is Art.CATEGORY else schritt.titel

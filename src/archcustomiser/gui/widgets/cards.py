@@ -51,7 +51,12 @@ class OptionCard(QWidget):
         self._checked = False
         self._auto = False
         self._verfuegbar = True
-        self._grund = ""
+        # Zwei verschiedene Gruende mit zwei verschiedenen Lebensdauern. Sie
+        # teilten sich frueher ein Feld: die Begruendung einer automatischen
+        # Ergaenzung ueberlebte deren Ende und stand danach rot unter einer
+        # ganz normal waehlbaren Karte.
+        self._auto_grund = ""
+        self._sperrgrund = ""
 
         # Animierte Zwischenwerte. Sie liegen absichtlich als einfache Zahlen
         # vor und nicht als Qt-Properties: die Karte zeichnet sich selbst, ein
@@ -95,23 +100,26 @@ class OptionCard(QWidget):
 
     def set_auto(self, auto: bool, grund: str = "") -> None:
         """Automatisch ergaenzt: angehakt, aber nicht anklickbar."""
-        if self._auto == auto and (not auto or grund == self._grund):
+        if self._auto == auto and grund == self._auto_grund:
             return
         self._auto = auto
-        if auto:
-            self._grund = grund
+        # Nur zuruecksetzen, wenn die Ergaenzung wegfaellt -- sonst bleibt der
+        # Grund einer laengst aufgehobenen Ergaenzung stehen.
+        self._auto_grund = grund if auto else ""
         self.setCursor(
             Qt.CursorShape.ArrowCursor if auto else Qt.CursorShape.PointingHandCursor
         )
-        self.setToolTip(grund if auto and grund else self._tooltip())
+        self.setToolTip(self._auto_grund or self._sperrgrund or self._tooltip())
         self.update()
 
     def set_availability(self, verfuegbar: bool, grund: str = "") -> None:
-        if self._verfuegbar == verfuegbar:
+        """Nicht waehlbar, weil eine andere Auswahl fehlt."""
+        neuer_grund = "" if verfuegbar else grund
+        if self._verfuegbar == verfuegbar and neuer_grund == self._sperrgrund:
             return
         self._verfuegbar = verfuegbar
-        self._grund = grund if not verfuegbar else ""
-        self.setToolTip(grund if grund else self._tooltip())
+        self._sperrgrund = neuer_grund
+        self.setToolTip(self._auto_grund or self._sperrgrund or self._tooltip())
         self.update()
 
     def _setze_auswahl(self, wert) -> None:
@@ -293,12 +301,19 @@ class OptionCard(QWidget):
             metrik.elidedText(self.option.label, Qt.TextElideMode.ElideRight, breite_titel),
         )
 
-        text = self._grund or self.option.description
+        # Ein Sperrgrund ist eine Beanstandung und wird rot gezeigt; die
+        # Begruendung einer Ergaenzung ist eine Auskunft und bleibt gedaempft.
+        if self._sperrgrund:
+            text, textfarbe = self._sperrgrund, p.danger
+        elif self._auto_grund:
+            text, textfarbe = self._auto_grund, p.text_muted
+        else:
+            text, textfarbe = self.option.description, p.text_muted
         if not text:
             return
         kleinschrift = schrift(CAPTION)
         maler.setFont(kleinschrift)
-        maler.setPen(QColor(p.danger if self._grund else p.text_muted))
+        maler.setPen(QColor(textfarbe))
         kleinmetrik = QFontMetricsF(kleinschrift)
         kasten = QRectF(
             links,

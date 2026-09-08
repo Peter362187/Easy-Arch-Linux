@@ -36,7 +36,7 @@ from ..design import tokens
 from ..design.typo import SUBTITLE, format_size, mono, schrift
 from ..packages_worker import PackageController
 from ..store import SelectionStore
-from ..widgets.common import brush, copy_to_clipboard
+from ..widgets.common import brush, copy_to_clipboard, setze_rolle
 from .base import PageBase
 
 log = logging.getLogger(__name__)
@@ -169,9 +169,7 @@ class SummaryPage(PageBase):
         self.completeChanged.emit()
 
     def _verdict_rolle(self, rolle: str) -> None:
-        self.verdict.setProperty("rolle", rolle)
-        self.verdict.style().unpolish(self.verdict)
-        self.verdict.style().polish(self.verdict)
+        setze_rolle(self.verdict, rolle)
 
     def plan(self) -> BuildPlan | None:
         return self._plan
@@ -226,7 +224,7 @@ class SummaryPage(PageBase):
             if verweis is not None:
                 eintrag = QTreeWidgetItem([pfad, "Verknuepfung", "", verweis.origin])
                 eintrag.setToolTip(0, f"zeigt auf {verweis.target}")
-                eintrag.setForeground(1, brush(p.accent))
+                eintrag.setForeground(1, brush(p.accent_lesbar))
             else:
                 datei = profil.tree.files[pfad]
                 eintrag = QTreeWidgetItem(

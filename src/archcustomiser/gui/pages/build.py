@@ -47,7 +47,7 @@ from ..design import tokens
 from ..design.typo import CAPTION, SUBTITLE, TITLE, format_size, mono, schrift
 from ..store import SelectionStore
 from ..widgets.checkmark import AnimatedCheck, Zustand
-from ..widgets.common import CodeBlock, HintLabel, Wertzeile, open_path
+from ..widgets.common import CodeBlock, HintLabel, Wertzeile, open_path, setze_rolle
 from ..widgets.progress import SmoothProgressBar
 from .base import PageBase
 
@@ -64,6 +64,9 @@ STEP_LABELS: dict[Step, str] = {
     Step.MKARCHISO: "ISO gebaut",
     Step.CLEANUP: "Aufgeraeumt",
 }
+
+# Das Feld, das die Seite mit den ISO-Einstellungen teilt.
+KEEP_WORK_DIR = "build.keep_work_dir"
 
 SEITE_LEER = 0
 SEITE_PRUEFUNG = 1
@@ -139,10 +142,17 @@ class BuildPage(PageBase):
         self._phasen: dict[str, _Phasenzeile] = {}
         self._folgen = True
         self._log_path: Path | None = None
+        # Wahr, waehrend die Seite selbst in den Store schreibt.
+        self._eigene_aenderung = False
 
         self._aufbauen()
         flow.preflightReady.connect(self._pruefung_zeigen)
         flow.abgebrochen.connect(self._pruefung_zuruecksetzen)
+        # Eine Vorabpruefung und ein Ergebnis gelten fuer die Zusammenstellung,
+        # zu der sie gehoeren. Wer danach noch ein Paket abwaehlt, sah sonst
+        # weiter den alten Befund -- und haette ihn losgeschickt.
+        store.resolutionChanged.connect(self._konfiguration_geaendert)
+        store.packagesChanged.connect(self._konfiguration_geaendert)
 
     # -- Aufbau ---------------------------------------------------------------
     def _aufbauen(self) -> None:
@@ -167,6 +177,17 @@ class BuildPage(PageBase):
         self.cancel_button.setVisible(False)
         self.cancel_button.clicked.connect(self._abbrechen_geklickt)
         kopf.addWidget(self.cancel_button, 0)
+
+        # Nach einem Fehlschlag oder Abbruch bleibt die Protokollansicht
+        # stehen -- dort steht ja der Grund. Ohne diesen Knopf gab es aber
+        # keinen Weg zurueck: die Ansicht enthielt nur Phasenliste und
+        # Protokoll, und ein Wechsel der Seite und zurueck stellte dieselbe
+        # tote Seite wieder her.
+        self.retry_button = QPushButton("Erneut &versuchen")
+        self.retry_button.setProperty("variant", "primary")
+        self.retry_button.setVisible(False)
+        self.retry_button.clicked.connect(self._erneut)
+        kopf.addWidget(self.retry_button, 0)
         self._root.addLayout(kopf)
 
         self.balken = SmoothProgressBar()
@@ -240,9 +261,14 @@ class BuildPage(PageBase):
         self.pruef_fuss = HintLabel("")
         layout.addWidget(self.pruef_fuss)
 
+        # Dasselbe Katalogfeld wie auf der Seite "ISO-Einstellungen".
+        # Wer den Haken hier setzt, will ihn auch dort und im
+        # gespeicherten Profil wiederfinden -- vorher galt die Wahl nur
+        # fuer diesen einen Bau und war anschliessend weg.
         self.keep_work = QCheckBox(
             "Arbeitsverzeichnis nach dem Bau behalten (zur Fehlersuche)"
         )
+        self.keep_work.toggled.connect(self._keep_work_uebernehmen)
         layout.addWidget(self.keep_work)
 
         zeile = QHBoxLayout()
@@ -375,6 +401,46 @@ class BuildPage(PageBase):
         self.start_button.setEnabled(False)
         self.flow.start()
 
+    def _keep_work_uebernehmen(self, an: bool) -> None:
+        """Der Haken gehoert in den Store, macht die Vorabpruefung aber nicht wert.
+
+        Ob das Arbeitsverzeichnis stehen bleibt, aendert an der ISO nichts --
+        eine Neupruefung deswegen waere blosse Schikane.
+        """
+        self._eigene_aenderung = True
+        try:
+            self.store.set_field(KEEP_WORK_DIR, an)
+        finally:
+            self._eigene_aenderung = False
+
+    def _konfiguration_geaendert(self) -> None:
+        """Nach einer Aenderung ist ein alter Befund nichts mehr wert.
+
+        Ein laufender Bau bleibt unberuehrt: er arbeitet mit einer eigenen
+        Kopie der Konfiguration, und die Navigation ist ohnehin gesperrt.
+        """
+        if self._eigene_aenderung:
+            return
+
+        seite = self.stapel.currentIndex()
+
+        if seite == SEITE_LEER:
+            return
+
+        if seite == SEITE_BAU and not self._done:
+            return
+
+        if seite in (SEITE_BAU, SEITE_ERGEBNIS):
+            # Ergebnis und Protokoll bleiben stehen -- die Datei gibt es ja
+            # wirklich. Nur die Bereitschaft, ohne neue Pruefung noch einmal
+            # loszulaufen, faellt weg.
+            self.job = None
+            return
+
+        self._zuruecksetzen()
+        self.headline.setText("Die Zusammenstellung hat sich geaendert")
+        self.detail.setText("Die Bauumgebung muss noch einmal geprueft werden.")
+
     def _pruefung_zuruecksetzen(self) -> None:
         self.start_button.setEnabled(True)
         self.headline.setText("Bereit zum Bauen")
@@ -414,7 +480,7 @@ class BuildPage(PageBase):
         # Gestaffelt aufdecken: eine Liste, die auf einmal erscheint, liest
         # niemand; eine, die sich Zeile fuer Zeile fuellt, schon.
         for nummer, zeile in enumerate(zeilen):
-            QTimer.singleShot(nummer * STAFFELUNG_MS, zeile.aufdecken)
+            _spaeter(zeile, nummer * STAFFELUNG_MS, zeile.aufdecken)
 
         self.headline.setText(f"Es wird gebaut: {self.store.config.iso_filename}")
         weg = getattr(self.flow, "bauweg", "")
@@ -427,7 +493,11 @@ class BuildPage(PageBase):
             f"und braucht rund {report.estimated_work_gb:.0f} GB im "
             f"Arbeitsverzeichnis."
         )
-        self.keep_work.setChecked(self.store.config.field_bool("build.keep_work_dir"))
+        blockiert = self.keep_work.blockSignals(True)
+        try:
+            self.keep_work.setChecked(self.store.config.field_bool(KEEP_WORK_DIR))
+        finally:
+            self.keep_work.blockSignals(blockiert)
         self.los_button.setEnabled(report.ok)
         if not report.ok:
             self.pruef_fuss.setText(
@@ -445,6 +515,7 @@ class BuildPage(PageBase):
         job.progressChanged.connect(self._fortschritt)
         job.linesReceived.connect(self._zeilen)
         job.finished.connect(self._beendet)
+        job.cancelFailed.connect(self._abbruch_gescheitert)
         job.failed.connect(self._fehlgeschlagen)
         job.cancelled.connect(self._abgebrochen)
 
@@ -585,10 +656,13 @@ class BuildPage(PageBase):
                 self.ergebnis_titel.setText(f"{pfad.name} ist fertig -- aber auffaellig")
 
         self.ergebnis_hinweise.setText("\n".join(f"- {hinweis}" for hinweis in hinweise))
-        self.ergebnis_hinweise.setProperty("rolle", "warnung")
+        self.ergebnis_hinweise.setVisible(bool(hinweise))
+        setze_rolle(self.ergebnis_hinweise, "warnung")
+        # Die Ergebnisansicht hat ihren eigenen Knopf ("Neue ISO").
+        self.retry_button.setVisible(False)
         self.stapel.setCurrentIndex(SEITE_ERGEBNIS)
         self.erfolgshaken.set_zustand(Zustand.OFFEN, animiert=False)
-        QTimer.singleShot(80, lambda: self.erfolgshaken.set_zustand(Zustand.OK))
+        _spaeter(self.erfolgshaken, 80, lambda: self.erfolgshaken.set_zustand(Zustand.OK))
 
         self._merke_in_historie(outcome, sha256, groesse)
         self._benachrichtigen(pfad)
@@ -641,6 +715,7 @@ class BuildPage(PageBase):
             if zeile.haken.zustand() is Zustand.LAEUFT:
                 zeile.haken.set_zustand(Zustand.FEHLER)
         self.headline.setText("Der Bau ist fehlgeschlagen")
+        self.retry_button.setVisible(True)
 
         meldung = getattr(fehler, "user_message", str(fehler))
         self.detail.setText(meldung.splitlines()[0] if meldung else "")
@@ -660,12 +735,22 @@ class BuildPage(PageBase):
             )
         self._ans_ende_springen()
 
+    def _erneut(self) -> None:
+        """Zurueck auf Anfang -- ausdruecklich, nicht automatisch.
+
+        Automatisch zuruecksetzen waere falsch: dabei verschwaende die
+        Protokollansicht, und genau dort steht, warum es schiefging.
+        """
+        self._zuruecksetzen()
+        self._pruefung_starten()
+
     def _abgebrochen(self) -> None:
         self._abschliessen()
         for zeile in self._phasen.values():
             if zeile.haken.zustand() is Zustand.LAEUFT:
                 zeile.haken.set_zustand(Zustand.WARNUNG)
         self.headline.setText("Abgebrochen")
+        self.retry_button.setVisible(True)
         self.detail.setText(
             "Das Arbeitsverzeichnis kann unvollstaendige Dateien enthalten."
         )
@@ -737,6 +822,27 @@ class BuildPage(PageBase):
         self.headline.setText("Wird abgebrochen ...")
         job.cancel()
 
+    def _abbruch_gescheitert(self, fehler: object) -> None:
+        """Ein Abbruch, der nicht durchgreift, darf nicht lautlos scheitern.
+
+        Das lokale Ziel wirft, wenn ``terminate()`` an EPERM scheitert und
+        ``pkexec`` fehlt. Vorher stand die Oberflaeche danach dauerhaft auf
+        "Wird abgebrochen ..." mit gesperrtem Knopf, waehrend der Bau in Ruhe
+        zu Ende lief.
+        """
+        meldung = getattr(fehler, "user_message", str(fehler))
+        log.warning("Abbruch fehlgeschlagen: %s", meldung)
+        self.headline.setText("Der Abbruch ist fehlgeschlagen")
+        self.detail.setText(meldung)
+        self.cancel_button.setEnabled(True)
+        QMessageBox.warning(
+            self,
+            "Abbruch fehlgeschlagen",
+            "Der laufende Bau liess sich nicht beenden:\n\n"
+            + meldung
+            + "\n\nEr laeuft weiter. Ein erneuter Versuch ist moeglich.",
+        )
+
     def _ordner_oeffnen(self) -> None:
         if self.outcome is not None and self.outcome.iso_path is not None:
             open_path(self.outcome.iso_path.parent)
@@ -763,8 +869,13 @@ class BuildPage(PageBase):
             )
             return
         self.sha_speichern.setText("Gespeichert")
-        QTimer.singleShot(
-            1500, lambda: self.sha_speichern.setText("Pruefsumme speichern")
+        # Die Uhr ist ein Kind des Knopfes. ``QTimer.singleShot`` haette
+        # anderthalb Sekunden spaeter auch dann noch zugeschlagen, wenn das
+        # Fenster laengst zu ist -- und dabei ein geloeschtes C++-Objekt
+        # angefasst.
+        _spaeter(
+            self.sha_speichern, 1500,
+            lambda: self.sha_speichern.setText("Pruefsumme speichern"),
         )
 
     def _zuruecksetzen(self) -> None:
@@ -775,6 +886,7 @@ class BuildPage(PageBase):
         self._done = False
         self.uhr.setText("")
         self.balken.setVisible(False)
+        self.retry_button.setVisible(False)
         self.detail.setText("")
         self.headline.setText("Bereit zum Bauen")
         for schluessel in list(self._phasen):
@@ -786,6 +898,16 @@ class BuildPage(PageBase):
         """Ob das Fenster jetzt zugehen darf."""
         job = self.job
         return job is None or not job.busy
+
+
+def _spaeter(besitzer: QWidget, verzoegerung: int, was) -> QTimer:
+    """Ein einmaliger Zeitgeber, der mit seinem Besitzer stirbt."""
+    uhr = QTimer(besitzer)
+    uhr.setSingleShot(True)
+    uhr.setInterval(verzoegerung)
+    uhr.timeout.connect(was)
+    uhr.start()
+    return uhr
 
 
 def _jetzt() -> str:

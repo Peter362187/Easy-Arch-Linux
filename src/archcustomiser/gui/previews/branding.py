@@ -34,6 +34,9 @@ log = logging.getLogger(__name__)
 # Ein Splash muss genau so gross sein; syslinux skaliert nicht.
 SPLASH_GROESSE = (640, 480)
 NEUZEICHNEN_MS = 80
+# Groesser laedt die Vorschau nicht -- ein Hintergrundbild hat wenige MB, und
+# das Feld nimmt jeden Pfad an, den jemand hineinschreibt.
+MAX_BILDGROESSE = 64 * 1024 * 1024
 
 _bildspeicher: dict[tuple[str, float], QPixmap] = {}
 
@@ -48,9 +51,17 @@ def _bild(pfad: str) -> QPixmap | None:
         return None
     datei = Path(pfad)
     try:
-        stempel = datei.stat().st_mtime
+        zustand = datei.stat()
     except OSError:
         return None
+    # Nur gewoehnliche Dateien. Auf eine benannte Roehre zeigend wuerde
+    # ``QPixmap`` beim Oeffnen haengenbleiben -- im Oberflaechenfaden.
+    if not datei.is_file():
+        return None
+    if zustand.st_size > MAX_BILDGROESSE:
+        log.info("Bild %s ist mit %d Byte zu gross fuer die Vorschau", datei, zustand.st_size)
+        return None
+    stempel = zustand.st_mtime
     schluessel = (str(datei), stempel)
     if schluessel in _bildspeicher:
         return _bildspeicher[schluessel]
@@ -63,11 +74,23 @@ def _bild(pfad: str) -> QPixmap | None:
 
 
 def _splash_warnung(pfad: str) -> str:
-    """Ob das Splash-Bild die Groesse hat, die syslinux verlangt."""
+    """Ob das Splash-Bild die Groesse hat, die syslinux verlangt.
+
+    Es werden 32 Byte gelesen, nicht die Datei. ``read_bytes()[:32]`` las
+    vorher alles ein und warf den Rest weg -- der Pfad kommt aus einem frei
+    eingetippten Feld, und das Feld wird bei jedem Tastendruck ausgewertet.
+    Ein Zeigefinger auf einer 8-GB-Datei genuegte, um das Fenster stillzulegen.
+    """
     if not pfad:
         return ""
+    datei = Path(pfad)
+    # Erst fragen, dann oeffnen: eine benannte Roehre blockiert schon beim
+    # Oeffnen, und ein Verzeichnis wirft.
+    if not datei.is_file():
+        return "Datei nicht lesbar."
     try:
-        kopf = Path(pfad).read_bytes()[:32]
+        with datei.open("rb") as strom:
+            kopf = strom.read(32)
     except OSError:
         return "Datei nicht lesbar."
     masse = png_dimensions(kopf)
@@ -366,11 +389,22 @@ class BrandingPreview(QWidget):
         self.boot.menu_titel = k.text("menu_title") or name
         self.boot.timeout = max(0, k.zahl("boot_timeout", 15))
         self.boot.splash = splash
-        self.boot.grub = "grub" in k.text("uefi_bootloader").lower()
-        eintraege = [f"{name} (x86_64, UEFI)", f"{name} (x86_64, BIOS)"]
-        if config.field_bool("build.include_memtest"):
+        # Welche Eintraege es gibt, entscheidet der Katalog -- genau wie
+        # ``derive_bootmodes`` es fuer den echten Bau tut. Vorher standen hier
+        # beide Zweige fest, und wer BIOS abwaehlte oder UEFI auf "none"
+        # setzte, sah eine Vorschau, die zum Ergebnis nicht passte.
+        uefi = k.text("uefi_bootloader", "systemd-boot").lower()
+        self.boot.grub = "grub" in uefi
+        eintraege = []
+        if uefi not in ("", "none"):
+            eintraege.append(f"{name} ({config.architecture}, UEFI)")
+        if k.flagge("bios_boot", True):
+            eintraege.append(f"{name} ({config.architecture}, BIOS)")
+        if k.flagge("include_memtest"):
             eintraege.append("Speichertest (memtest86+)")
-        eintraege.append("UEFI-Firmwareeinstellungen")
+        if self.boot.grub:
+            # Nur GRUB bringt diesen Eintrag mit.
+            eintraege.append("UEFI-Firmwareeinstellungen")
         self.boot.eintraege = tuple(eintraege)
         self.boot.hinweis = _splash_warnung(splash)
         self.boot.update()

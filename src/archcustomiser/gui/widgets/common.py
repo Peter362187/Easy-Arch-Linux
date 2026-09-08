@@ -37,6 +37,20 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
+def setze_rolle(widget: QWidget, rolle: str) -> None:
+    """Eine geaenderte ``rolle`` wirkt erst nach einem Neupolieren.
+
+    Qt wertet Property-Selektoren nur beim Polieren aus. Ein ``setProperty``
+    danach aendert gar nichts -- die Warnungen nach einem Bau blieben deshalb
+    in der gewoehnlichen Textfarbe stehen.
+    """
+    if widget.property("rolle") == rolle:
+        return
+    widget.setProperty("rolle", rolle)
+    widget.style().unpolish(widget)
+    widget.style().polish(widget)
+
+
 def brush(colour: str) -> QBrush:
     """Ein Pinsel aus einer Farbangabe -- fuer Baum- und Tabellenzeilen."""
     return QBrush(QColor(colour))
@@ -58,7 +72,13 @@ def copy_to_clipboard(value: str, button: QPushButton | None = None) -> None:
     original = getattr(button, "_original_text", None) or button.text()
     button._original_text = original          # type: ignore[attr-defined]
     button.setText("Kopiert")
-    QTimer.singleShot(1500, lambda: button.setText(original))
+    # Die Uhr haengt am Knopf. ``QTimer.singleShot`` haette anderthalb
+    # Sekunden spaeter auch dann noch zugeschlagen, wenn der Dialog laengst
+    # zu ist -- und dabei ein geloeschtes C++-Objekt angefasst.
+    uhr = QTimer(button)
+    uhr.setSingleShot(True)
+    uhr.timeout.connect(lambda: button.setText(original))
+    uhr.start(1500)
 
 
 def open_path(path: Path | str) -> bool:

@@ -225,3 +225,22 @@ def test_loading_a_profile_marks_everything_as_visited(ziel: str) -> None:
     schritt = m.step(ziel)
     assert schritt is not None and m.anklickbar(schritt)
     assert m.statuses()[ziel] is Status.ERLEDIGT
+
+
+# ---------------------------------------------------------------------------
+# Beschriftung
+# ---------------------------------------------------------------------------
+
+
+def test_only_categories_are_numbered() -> None:
+    """Der Startschritt traegt keine Nummer.
+
+    Wurde ueber alle Schritte gezaehlt, hiess der erste einzustellende Schritt
+    "2. Grundkonfiguration" -- und der letzte bekam eine Nummer, obwohl er
+    "ISO erstellen" heisst.
+    """
+    m = modell("a", "b", "c")
+    kategorien = [s for s in m.steps if s.art is Art.CATEGORY]
+    assert [m.index_of(s.id) for s in kategorien] == [1, 2, 3]
+    assert m.steps[0].art is Art.WELCOME
+    assert m.steps[-1].art is Art.BUILD

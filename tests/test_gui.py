@@ -295,5 +295,12 @@ def test_a_non_cancellable_wait_dialog_ignores_escape(qapp) -> None:
     from archcustomiser.gui.widgets.wait_dialog import WaitDialog
 
     dialog = WaitDialog(lambda: None, "laeuft", cancellable=False)
+    beendet: list[int] = []
+    dialog.finished.connect(beendet.append)
+
     dialog.reject()
-    assert not dialog.isHidden() or dialog.result() == 0
+
+    # ``QDialog.reject()`` wuerde ``finished`` senden und den Dialog schliessen.
+    # Genau das darf hier nicht passieren: bei der archiso-Installation lief
+    # pacman sonst unsichtbar weiter.
+    assert not beendet, "der Dialog hat sich trotz cancellable=False geschlossen"

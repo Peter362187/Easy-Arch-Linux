@@ -131,6 +131,15 @@ def animate(
             fertig()
 
     animation.finished.connect(abschluss)
+    # Auch austragen, wenn die Animation gar nicht zu Ende kommt. Qt sendet
+    # ``finished`` nur beim regulaeren Ende -- nicht beim Anhalten und nicht
+    # beim Zerstoeren. Die Animation ist aber ein Kind ihres Ziels: verschwindet
+    # das Widget mitten in der Bewegung, war ihr Eintrag hier unsterblich.
+    # Zwei Folgen hatte das, und beide sind unangenehm: ``active_count()``
+    # kehrte nie mehr auf null zurueck (womit die Leerlaufzusicherung
+    # unpruefbar wurde), und ``stop_all()`` fasste beim Schliessen ein
+    # geloeschtes C++-Objekt an -- mitten in ``closeEvent``.
+    animation.destroyed.connect(lambda *_: _laufend.discard(animation))
     _laufend.add(animation)
     animation.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
     return animation
@@ -156,12 +165,21 @@ def run(animation: QAbstractAnimation | None, fertig: Callable[[], None] | None 
             fertig()
 
     animation.finished.connect(abschluss)
+    animation.destroyed.connect(lambda *_: _laufend.discard(animation))
     _laufend.add(animation)
     animation.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
 
 
 def stop_all() -> None:
-    """Beendet alles Laufende -- beim Schliessen eines Fensters."""
+    """Beendet alles Laufende -- beim Schliessen eines Fensters.
+
+    Wehrhaft gegen Objekte, die es nicht mehr gibt: ``stop_all`` laeuft mitten
+    im Abbau eines Fensters, und ein Fehler hier wuerde ``closeEvent`` auf
+    halbem Weg abbrechen.
+    """
     for animation in list(_laufend):
-        animation.stop()
+        try:
+            animation.stop()
+        except RuntimeError:      # das C++-Objekt ist schon weg
+            pass
     _laufend.clear()

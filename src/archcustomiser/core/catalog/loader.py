@@ -18,6 +18,7 @@ from typing import Any
 
 import yaml
 
+from .. import validation
 from ..paths import data_root, user_catalog_dir
 from . import predicate
 from .models import (
@@ -359,6 +360,12 @@ def _parse_fields(raw: Any, category_id: str, where: str) -> tuple[FieldSpec, ..
             raise CatalogError(
                 f"{spot}: widget {widget!r} unbekannt; erlaubt: {sorted(_VALID_WIDGETS)}"
             )
+        validator = _str(data, "validator", spot)
+        if validator and validator not in validation.registry_names():
+            raise CatalogError(
+                f"{spot}: validator {validator!r} unbekannt; erlaubt: "
+                f"{sorted(validation.registry_names())}"
+            )
         secret = _bool(data, "secret", spot, widget == "password")
         default = data.get("default")
         if secret and default not in (None, ""):
@@ -376,7 +383,7 @@ def _parse_fields(raw: Any, category_id: str, where: str) -> tuple[FieldSpec, ..
                 secret=secret,
                 choices=_parse_choices(data.get("choices"), spot),
                 choices_from=_str(data, "choices_from", spot),
-                validator=_str(data, "validator", spot),
+                validator=validator,
                 minimum=data.get("min"),
                 maximum=data.get("max"),
                 file_filter=_str(data, "file_filter", spot),
@@ -386,6 +393,17 @@ def _parse_fields(raw: Any, category_id: str, where: str) -> tuple[FieldSpec, ..
                 preview_role=_str(data, "preview_role", spot),
             )
         )
+
+    # ``confirm_field`` erst am Ende pruefen: es darf auf ein Feld zeigen, das
+    # weiter unten steht. Ein Tippfehler sperrte sonst den Weiter-Knopf
+    # dauerhaft -- verglichen wurde gegen ein Feld, das es nicht gibt.
+    bekannt = {spec.id for spec in result}
+    for spec in result:
+        if spec.confirm_field and spec.confirm_field not in bekannt:
+            raise CatalogError(
+                f"{where}: confirm_field {spec.confirm_field!r} von {spec.id!r} "
+                f"nennt kein Feld dieser Kategorie; vorhanden: {sorted(bekannt)}"
+            )
     return tuple(result)
 
 

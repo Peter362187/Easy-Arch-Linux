@@ -109,7 +109,7 @@ class Toast(QWidget):
                 textkasten, int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), self._text
             )
             maler.setFont(schrift(BODY, fett=True))
-            maler.setPen(QColor(p.accent))
+            maler.setPen(QColor(p.accent_lesbar))
             maler.drawText(
                 flaeche.adjusted(0, 0, -werte.space.lg, 0),
                 int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),

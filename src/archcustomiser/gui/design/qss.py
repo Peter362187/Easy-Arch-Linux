@@ -90,7 +90,31 @@ QPushButton[variant="ghost"]:hover {{
 }}
 QPushButton[variant="danger"] {{
     background: {p.danger};
-    color: #ffffff;
+    /* Nicht fest weiss: auf dem dunklen Rot #f0736a erreicht Weiss nur
+       2.85:1 -- unter jeder Schwelle. Welche Schrift lesbar ist, rechnet die
+       Palette aus. */
+    color: {p.danger_text};
+}}
+QPushButton[variant="danger"]:hover {{
+    background: {p.danger};
+    color: {p.danger_text};
+}}
+QPushButton[variant="danger"]:pressed {{
+    background: {p.danger};
+    color: {p.danger_text};
+}}
+QPushButton[variant="danger"]:disabled {{
+    background: {p.surface_alt};
+    color: {p.text_subtle};
+}}
+/* Der Fokusrahmen muss auf der gefuellten Flaeche sichtbar bleiben. Die
+   allgemeine Regel faerbt ihn im Akzent -- auf einem akzentfarbenen Knopf
+   war er damit unsichtbar. */
+QPushButton[variant="primary"]:focus {{
+    border-color: {p.accent_text};
+}}
+QPushButton[variant="danger"]:focus {{
+    border-color: {p.danger_text};
 }}
 
 /* --- Eingabefelder ---------------------------------------------------- */
@@ -149,6 +173,13 @@ QCheckBox::indicator:checked, QRadioButton::indicator:checked {{
 QCheckBox::indicator:disabled, QRadioButton::indicator:disabled {{
     border-color: {p.border};
     background: {p.surface_alt};
+}}
+/* Gesperrt UND angehakt. Ohne diese Regel gewinnt die Regel darueber bei
+   gleicher Spezifitaet allein durch ihre Position, und ein automatisch
+   ergaenztes, gesperrtes Haekchen sah aus wie ein leeres. */
+QCheckBox::indicator:checked:disabled, QRadioButton::indicator:checked:disabled {{
+    background: {p.border_strong};
+    border-color: {p.border_strong};
 }}
 
 /* --- Listen und Baeume ------------------------------------------------ */
@@ -293,5 +324,8 @@ QLabel[rolle="warnung"] {{
 }}
 QLabel[rolle="erfolg"] {{
     color: {p.success};
+}}
+QLabel[rolle="akzent"] {{
+    color: {p.accent_lesbar};
 }}
 """

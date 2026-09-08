@@ -52,6 +52,19 @@ class PreviewContext:
         except (TypeError, ValueError):
             return vorgabe
 
+    def flagge(self, rolle: str, vorgabe: bool = False) -> bool:
+        """Ein Ja/Nein-Wert -- so gedeutet wie in ``BuildConfig.field_bool``.
+
+        Aus einem von Hand bearbeiteten Profil kann statt eines ``bool`` auch
+        die Zeichenkette "true" kommen; ``bool("false")`` waere True.
+        """
+        wert = self.wert(rolle, vorgabe)
+        if isinstance(wert, bool):
+            return wert
+        if isinstance(wert, str):
+            return wert.strip().lower() in ("1", "true", "yes", "ja", "on")
+        return bool(wert)
+
 
 Fabrik = Callable[[PreviewContext], QWidget]
 
@@ -91,8 +104,20 @@ def rollen_aus_katalog(catalog) -> dict[str, str]:
     rollen: dict[str, str] = {}
     for category in catalog.categories:
         for spec in category.fields:
-            if spec.preview_role:
-                rollen.setdefault(spec.preview_role, spec.binding)
+            if not spec.preview_role:
+                continue
+            vorhanden = rollen.get(spec.preview_role)
+            if vorhanden is not None:
+                # Der Gewinner haengt allein an der Schrittnummer -- das
+                # ist keine Entscheidung, sondern ein Zufall.
+                log.warning(
+                    "Rolle %r ist doppelt vergeben: %s gewinnt, %s wird ignoriert",
+                    spec.preview_role,
+                    vorhanden,
+                    spec.binding,
+                )
+                continue
+            rollen[spec.preview_role] = spec.binding
     return rollen
 
 

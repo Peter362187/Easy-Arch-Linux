@@ -317,7 +317,9 @@ class WelcomePage(PageBase):
             return True
 
         if self._gewaehlt == "datei":
-            start = str(self.profiles.builtin_dir)
+            # Die mitgelieferten Vorlagen stehen als Karten direkt
+            # darueber -- wer hier klickt, sucht seine eigene Datei.
+            start = self._startordner()
             pfad, _filter = QFileDialog.getOpenFileName(
                 self, "Profil laden", start, "Profile (*.yaml *.yml)"
             )
@@ -339,6 +341,15 @@ class WelcomePage(PageBase):
             return False
         self._angewendet = ("vorlage", str(info.path))
         return True
+
+    def _startordner(self) -> str:
+        """Wo der Dateidialog aufgeht."""
+        from ...core.paths import user_profiles_dir
+
+        eigene = user_profiles_dir()
+        if eigene.is_dir():
+            return str(eigene)
+        return str(Path.home())
 
     def _darf_verwerfen(self) -> bool:
         """Fragt nach, bevor eine begonnene Zusammenstellung verworfen wird.
@@ -379,11 +390,12 @@ class WelcomePage(PageBase):
         self.store.replace_config(ergebnis.config)
         self._loaded_from = pfad
         if ergebnis.secret_fields:
+            from ..actions import passwort_hinweis
+
             QMessageBox.information(
                 self,
                 "Passwort erneut eingeben",
-                "Profile enthalten keine Passwoerter. Bitte das Passwort im "
-                "Schritt 'Benutzerkonto' neu eingeben.",
+                passwort_hinweis(self.store.catalog, ergebnis.secret_fields),
             )
         self.profileLoaded.emit()
         return True

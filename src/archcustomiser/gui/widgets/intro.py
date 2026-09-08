@@ -50,16 +50,21 @@ class IntroOverlay(QWidget):
         self.update()
 
     def _ausblenden(self) -> None:
-        QTimer.singleShot(
-            motion.duration(motion.SCHNELL),
-            lambda: motion.animate(
-                self,
-                von=1.0,
-                bis=0.0,
-                dauer=motion.NORMAL,
-                setzen=self._setze_deckkraft,
-                fertig=self.deleteLater,
-            ),
+        # Die Uhr ist ein Kind des Overlays: wird das Fenster vorher
+        # geschlossen, stirbt sie mit und fasst nichts Geloeschtes mehr an.
+        uhr = QTimer(self)
+        uhr.setSingleShot(True)
+        uhr.timeout.connect(self._verschwinden)
+        uhr.start(motion.duration(motion.SCHNELL))
+
+    def _verschwinden(self) -> None:
+        motion.animate(
+            self,
+            von=1.0,
+            bis=0.0,
+            dauer=motion.NORMAL,
+            setzen=self._setze_deckkraft,
+            fertig=self.deleteLater,
         )
 
     def _setze_deckkraft(self, wert) -> None:

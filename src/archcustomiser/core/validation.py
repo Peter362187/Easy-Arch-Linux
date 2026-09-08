@@ -433,6 +433,17 @@ _REGISTRY: dict[str, Validator] = {
     "writable_dir": validate_writable_dir,
 }
 
+def registry_names() -> frozenset[str]:
+    """Die im Katalog erlaubten Validatornamen.
+
+    Der Loader prueft dagegen. Ohne diese Pruefung deaktivierte ein Tippfehler
+    im YAML die Feldpruefung lautlos: ``validate()`` gibt bei einem unbekannten
+    Namen kommentarlos "in Ordnung" zurueck -- und ein Feld, das eigentlich
+    einen Hostnamen pruefen sollte, nahm alles an.
+    """
+    return frozenset(_REGISTRY)
+
+
 
 def validate(name: str, value: Any) -> ValidationResult:
     validator = _REGISTRY.get(name)

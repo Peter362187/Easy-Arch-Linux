@@ -60,6 +60,7 @@ class FakeJob(QObject):
     finished = Signal(object, str)
     failed = Signal(object)
     cancelled = Signal()
+    cancelFailed = Signal(object)
 
     def __init__(self, running: bool = True) -> None:
         super().__init__()
@@ -369,10 +370,14 @@ def test_scrolling_up_pauses_the_autoscroll(page, tmp_path) -> None:
     balken = page.log.verticalScrollBar()
     balken.setValue(0)
     assert not page._folgen
-    assert page.ans_ende.isVisible() or page.isHidden()
+    # ``isVisible`` ist auf einer nie gezeigten Seite immer False und taugt
+    # deshalb nicht als Probe. ``isHidden`` beantwortet die Frage, um die es
+    # geht: wurde der Knopf ausdruecklich versteckt oder nicht.
+    assert not page.ans_ende.isHidden(), "der Sprung-Knopf fehlt"
 
     page._ans_ende_springen()
     assert page._folgen
+    assert page.ans_ende.isHidden()
 
 
 def test_starting_over_clears_the_dynamic_phases(page, tmp_path) -> None:
@@ -450,3 +455,117 @@ def test_the_history_entry_holds_no_secret(page, tmp_path, monkeypatch) -> None:
     datei = next((tmp_path / "zustand" / "builds").glob("*.json"))
     assert "hunter2" not in datei.read_text(encoding="utf-8")
     assert "password" not in json.loads(datei.read_text(encoding="utf-8"))
+
+
+def test_a_changed_configuration_invalidates_the_preflight(page, tmp_path) -> None:
+    """Der Befund gilt fuer die Zusammenstellung, zu der er gehoert.
+
+    Wer nach der Vorabpruefung noch ein Paket abwaehlt, sah sonst weiter den
+    alten Befund -- und haette ihn losgeschickt.
+    """
+    from archcustomiser.gui.pages.build import SEITE_LEER, SEITE_PRUEFUNG
+
+    vorbereiten(page, tmp_path)
+    assert page.stapel.currentIndex() == SEITE_PRUEFUNG
+
+    page.store.toggle("apps.firefox", True)
+    assert page.stapel.currentIndex() == SEITE_LEER
+    assert page.job is None
+
+
+def test_a_running_build_is_not_disturbed_by_the_store(page, tmp_path) -> None:
+    from archcustomiser.gui.pages.build import SEITE_BAU
+
+    vorbereiten(page, tmp_path)
+    page._bau_starten()
+    page.store.toggle("apps.git", True)
+    assert page.stapel.currentIndex() == SEITE_BAU
+
+
+def test_a_finished_result_stays_visible(page, tmp_path) -> None:
+    from archcustomiser.gui.pages.build import SEITE_ERGEBNIS
+
+    job = vorbereiten(page, tmp_path)
+    page._bau_starten()
+    job.busy = False
+    job.finished.emit(ergebnis(tmp_path), "abc")
+
+    page.store.toggle("apps.git", True)
+    assert page.stapel.currentIndex() == SEITE_ERGEBNIS
+    assert page.job is None, "ohne neue Pruefung darf nicht wieder gebaut werden"
+
+
+def test_a_failed_cancel_is_reported_and_can_be_retried(
+    page, tmp_path, monkeypatch
+) -> None:
+    """Das lokale Ziel wirft, wenn terminate() an EPERM scheitert.
+
+    Vorher stand die Oberflaeche danach dauerhaft auf "Wird abgebrochen ..."
+    mit gesperrtem Knopf, waehrend der Bau in Ruhe zu Ende lief.
+    """
+    from archcustomiser.core.build.errors import BuildError
+
+    gewarnt: list[str] = []
+    monkeypatch.setattr(
+        QMessageBox, "warning", lambda *a, **k: gewarnt.append(a[2] if len(a) > 2 else "")
+    )
+    monkeypatch.setattr(
+        QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes
+    )
+
+    job = vorbereiten(page, tmp_path)
+    page._bau_starten()
+    page._abbrechen_geklickt()
+    assert not page.cancel_button.isEnabled()
+
+    job.cancelFailed.emit(BuildError("kein Recht, den Prozess zu beenden"))
+    assert gewarnt, "der gescheiterte Abbruch blieb unsichtbar"
+    assert page.cancel_button.isEnabled(), "kein zweiter Versuch moeglich"
+
+
+def test_a_failed_build_offers_a_retry(page, tmp_path) -> None:
+    """Die Protokollansicht war ohne Knopf eine Sackgasse."""
+    from archcustomiser.core.build.errors import BuildFailed
+
+    job = vorbereiten(page, tmp_path)
+    page._bau_starten()
+    job.busy = False
+    job.failed.emit(BuildFailed("mkarchiso ist ausgestiegen"))
+    assert not page.retry_button.isHidden()
+    assert "FEHLER" in page.log.toPlainText(), "das Protokoll wurde weggeraeumt"
+
+
+def test_a_cancelled_build_offers_a_retry(page, tmp_path) -> None:
+    job = vorbereiten(page, tmp_path)
+    page._bau_starten()
+    job.busy = False
+    job.cancelled.emit()
+    assert not page.retry_button.isHidden()
+
+
+def test_a_successful_build_has_no_retry_button(page, tmp_path) -> None:
+    """Dort heisst der Knopf "Neue ISO" und steht in der Ergebnisansicht."""
+    job = vorbereiten(page, tmp_path)
+    page._bau_starten()
+    job.busy = False
+    job.finished.emit(ergebnis(tmp_path), "abc")
+    assert page.retry_button.isHidden()
+
+
+def test_the_keep_work_dir_checkbox_reaches_the_store(page, tmp_path) -> None:
+    """Der Haken gilt fuers Profil, nicht nur fuer diesen einen Bau."""
+    vorbereiten(page, tmp_path)
+    page.keep_work.setChecked(True)
+    assert page.store.config.field_bool("build.keep_work_dir") is True
+
+
+def test_the_keep_work_dir_checkbox_does_not_invalidate_the_preflight(
+    page, tmp_path
+) -> None:
+    """Ob das Arbeitsverzeichnis stehen bleibt, aendert an der ISO nichts."""
+    from archcustomiser.gui.pages.build import SEITE_PRUEFUNG
+
+    vorbereiten(page, tmp_path)
+    page.keep_work.setChecked(True)
+    assert page.stapel.currentIndex() == SEITE_PRUEFUNG
+    assert page.job is not None

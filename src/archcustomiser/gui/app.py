@@ -22,7 +22,14 @@ log = logging.getLogger(__name__)
 
 
 def run(argv: list[str] | None = None) -> int:
-    app = QApplication(argv if argv is not None else sys.argv)
+    # Eine vorhandene Anwendung wiederverwenden. Qt laesst nur eine zu und
+    # wirft sonst ("Please destroy the QApplication singleton"); ausserdem
+    # laesst sich ``run()`` nur so ueberhaupt in einem Test aufrufen -- und
+    # genau daran lag es, dass der Startpfad jahrelang ungeprueft blieb.
+    vorhanden = QApplication.instance()
+    app = vorhanden if isinstance(vorhanden, QApplication) else QApplication(
+        argv if argv is not None else sys.argv
+    )
     app.setApplicationName("Arch Linux ISO Builder")
     app.setOrganizationName("ArchCustomiser")
     # Fusion auf allen Plattformen: der Windows-Stil zeichnet Teile selbst und
@@ -45,7 +52,10 @@ def run(argv: list[str] | None = None) -> int:
         return 2
 
     settings = Settings()
-    motion.set_reduced(settings.animationen_reduzieren())
+    # Eine Eigenschaft, keine Methode -- die Klammern riefen das Ergebnis auf
+    # ("'bool' object is not callable") und liessen das Programm beim Start
+    # abstuerzen, bevor ein Fenster zu sehen war.
+    motion.set_reduced(settings.animationen_reduzieren)
     theme = ThemeManager(settings)
     theme.apply()
 

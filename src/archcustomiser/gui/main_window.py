@@ -53,8 +53,15 @@ from .widgets.page_stack import AnimatedStack
 from .widgets.sidebar import Kopfzeile, StepSidebar
 from .widgets.toast import Art as ToastArt
 from .widgets.toast import ToastHost
+from .widgets.wait_dialog import run_with_wait
 
 log = logging.getLogger(__name__)
+
+# So lange wird auf die Faeden eines abgebrochenen Baus gewartet. Der
+# Controller allein raeumt sich bis zu 120 s Zeit ein, das WSL-Ziel
+# ebenfalls -- 30 s waren zu knapp und liessen Qt einen laufenden Faden
+# zerstoeren.
+WARTEN_AUF_ABBRUCH_MS = 150_000
 
 
 class MainWindow(QMainWindow):
@@ -192,13 +199,25 @@ class MainWindow(QMainWindow):
         self.welcome.profileLoaded.connect(self._profil_geladen)
         self._seite_hinzu(WELCOME_ID, self.welcome)
 
+        ohne_seite: list[str] = []
         for schritt in self.model.steps:
             if schritt.art is not Art.CATEGORY or schritt.category is None:
                 continue
             seite = factory.create(schritt.category)
             if seite is None:
+                # Ein unbekannter Seitentyp im Katalog. Den Schritt stehen zu
+                # lassen waere schlimmer als ihn wegzulassen: die Navigation
+                # haette ihn angeboten, und beim Betreten gaebe es kein Widget
+                # -- ein Schritt, in dem man haengenbleibt.
+                ohne_seite.append(schritt.id)
                 continue
             self._seite_hinzu(schritt.id, seite)
+
+        if ohne_seite:
+            log.error("Schritte ohne Seite werden uebersprungen: %s", ohne_seite)
+            self.model.steps = [
+                schritt for schritt in self.model.steps if schritt.id not in ohne_seite
+            ]
 
         self.build_page = BuildPage(self.store, self.flow)
         self.build_page.laufendGeaendert.connect(self._sperre_setzen)
@@ -393,8 +412,14 @@ class MainWindow(QMainWindow):
 
     # -- Beenden --------------------------------------------------------------
     def closeEvent(self, event) -> None:
-        """Ein laufender Bau haelt das Fenster fest; sonst wird nachgefragt."""
-        if not self.build_page.darf_schliessen():
+        """Erst alle Fragen, dann das Unumkehrbare.
+
+        Frueher stand es andersherum: der Bau wurde abgebrochen und aufgeraeumt,
+        **danach** kam die Frage nach der ungesicherten Zusammenstellung -- und
+        wer dort abbrach, blieb im Programm, hatte aber seinen Bau verloren.
+        """
+        laeuft = not self.build_page.darf_schliessen()
+        if laeuft:
             from PySide6.QtWidgets import QMessageBox
 
             antwort = QMessageBox.question(
@@ -408,17 +433,28 @@ class MainWindow(QMainWindow):
             if antwort != QMessageBox.StandardButton.Yes:
                 event.ignore()
                 return
-            job = self.build_page.job
-            if job is not None:
-                job.cancel()
-                # Auf die Faeden warten, statt sie von Qt unter laufendem
-                # pkill wegraeumen zu lassen ("QThread: Destroyed while thread
-                # is still running").
-                job.wait(30000)
 
         if not self.actions_.darf_beenden():
             event.ignore()
             return
+
+        job = self.build_page.job
+        # Erneut pruefen: waehrend der beiden Rueckfragen kann der Bau fertig
+        # geworden sein.
+        if laeuft and job is not None and job.busy:
+            job.cancel()
+            # Warten muss sein -- sonst raeumt Qt einen laufenden Faden unter
+            # einem laufenden pkill weg. Warten darf aber nicht im
+            # Oberflaechenfaden geschehen: ein Abbruch beim WSL-Ziel braucht bis
+            # zu zwei Minuten, und genau dafuer gibt es den Wartedialog.
+            run_with_wait(
+                lambda: job.wait(WARTEN_AUF_ABBRUCH_MS),
+                "Der Bau wird abgebrochen.\n\n"
+                "Das kann eine Minute dauern, wenn in einem Linux-Untersystem "
+                "gebaut wird.",
+                parent=self,
+                cancellable=False,
+            )
 
         self.controller.cancel()
         self.toasts.schliesse_alle()

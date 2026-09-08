@@ -13,8 +13,8 @@ sichtbar stocken.
 
 from __future__ import annotations
 
-import hashlib
 import logging
+import threading
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QThread, QTimer, Signal
@@ -22,6 +22,7 @@ from PySide6.QtCore import QObject, QThread, QTimer, Signal
 from ..core.archiso.errors import ProfileError
 from ..core.build import BuildController
 from ..core.build.errors import BuildCancelled, BuildError
+from ..core.build.verify import sha256_von
 from ..core.catalog import Catalog
 from ..core.config import BuildConfig
 from ..core.resolver import Resolution
@@ -31,9 +32,6 @@ log = logging.getLogger(__name__)
 
 FLUSH_INTERVAL_MS = 120
 MAX_PENDING_LINES = 500
-# Blockgroesse der Pruefsummenberechnung. Groesser bringt nichts mehr, die
-# Platte ist die Grenze; kleiner macht den Abbruch nur unwesentlich flinker.
-HASH_BLOCK = 1024 * 1024
 
 
 class _BuildThread(QThread):
@@ -59,6 +57,8 @@ class _BuildThread(QThread):
         self.work_dir = work_dir
         self.out_dir = out_dir
         self.keep_work_dir = keep_work_dir
+        # Eigener Merker: siehe _pruefsumme.
+        self._hash_abbruch = threading.Event()
 
     def run(self) -> None:
         try:
@@ -81,6 +81,10 @@ class _BuildThread(QThread):
             log.exception("Unerwarteter Fehler im Build")
             self.failed.emit(exc)
 
+    def gib_pruefsumme_auf(self) -> None:
+        """Beim Beenden: die Rechnung darf dann abbrechen."""
+        self._hash_abbruch.set()
+
     def _pruefsumme(self, outcome) -> str:
         """SHA-256 der fertigen ISO -- hier im Bau-Faden, nicht in der Oberflaeche.
 
@@ -91,21 +95,16 @@ class _BuildThread(QThread):
 
         Die Summe ist kein Beiwerk: wer die ISO auf einen USB-Stick schreibt,
         braucht sie, um einen stillen Uebertragungsfehler zu bemerken.
+
+        Der Abbruch haengt an einem **eigenen** Merker, nicht am Abbruchmerker
+        des Controllers. Sonst warf ein Klick auf "Abbrechen", der Sekunden zu
+        spaet kam, die Pruefsumme einer laengst fertigen ISO weg -- und in der
+        Ergebnisansicht stand "nicht berechnet".
         """
         pfad = getattr(outcome, "iso_path", None)
         if pfad is None or not pfad.is_file():
             return ""
-        digest = hashlib.sha256()
-        try:
-            with pfad.open("rb") as datei:
-                while block := datei.read(HASH_BLOCK):
-                    if self.controller.cancelled:
-                        return ""
-                    digest.update(block)
-        except OSError as exc:
-            log.warning("Pruefsumme nicht berechenbar: %s", exc)
-            return ""
-        return digest.hexdigest()
+        return sha256_von(pfad, abbruch=self._hash_abbruch.is_set)
 
 
 class _CancelThread(QThread):
@@ -126,11 +125,19 @@ class _CancelThread(QThread):
         super().__init__(parent)
         self.controller = controller
 
+    failed = Signal(object)
+
     def run(self) -> None:
         try:
             self.controller.cancel()
-        except Exception:        # ein Abbruch darf nie seinerseits scheitern
+        except Exception as exc:  # ein Abbruch darf nie seinerseits scheitern
             log.exception("Abbruch fehlgeschlagen")
+            # Aber er darf auch nicht lautlos scheitern. Genau dieser Fall ist
+            # vorgesehen: das lokale Ziel wirft, wenn terminate() an EPERM
+            # scheitert und pkexec fehlt. Die Oberflaeche stand dann dauerhaft
+            # auf "Wird abgebrochen ..." mit gesperrtem Knopf, waehrend der Bau
+            # weiterlief.
+            self.failed.emit(exc)
 
 
 class BuildJob(QObject):
@@ -142,6 +149,7 @@ class BuildJob(QObject):
     finished = Signal(object, str)           # (BuildOutcome, SHA-256)
     failed = Signal(object)
     cancelled = Signal()
+    cancelFailed = Signal(object)
 
     def __init__(
         self,
@@ -221,8 +229,23 @@ class BuildJob(QObject):
             return
         self._cancel_requested = True
         thread = _CancelThread(self.controller, self)
+        thread.failed.connect(self._on_cancel_failed)
+        thread.finished.connect(self._on_cancel_thread_finished)
         self._cancel_thread = thread
         thread.start()
+
+    def _on_cancel_failed(self, fehler: object) -> None:
+        # Ein zweiter Versuch muss moeglich sein -- der Merker im Controller
+        # bleibt allerdings gesetzt, der Bau endet also so oder so als
+        # abgebrochen.
+        self._cancel_requested = False
+        self.cancelFailed.emit(fehler)
+
+    def _on_cancel_thread_finished(self) -> None:
+        thread = self._cancel_thread
+        self._cancel_thread = None
+        if thread is not None:
+            thread.deleteLater()
 
     def wait(self, milliseconds: int = 30000) -> bool:
         fertig = True

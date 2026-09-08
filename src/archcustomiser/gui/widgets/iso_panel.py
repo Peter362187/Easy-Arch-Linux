@@ -166,7 +166,12 @@ class IsoPanel(QWidget):
         # daraus "linuxlinux".
         self.kernel.setze(resolution.kernel_suffix)
         self.datei.setze(f"{config.iso_filename}\nDatentraeger: {config.iso_label}")
-        self.repos.setze(", ".join(resolution.repositories) or "core, extra")
+        # ``resolution.repositories`` sind nur die ZUSAETZLICHEN Repos aus
+        # dem Katalog -- im ganzen Katalog steht dort ausschliesslich
+        # "multilib". Ungefiltert stand hier also "multilib" als
+        # vollstaendige Liste, und ohne Steam ein Literal. Die Wahrheit
+        # kennt die Stelle, die die pacman.conf schreibt.
+        self.repos.setze(", ".join(_repositorien(resolution)))
         self.gruppen.setze(", ".join(resolution.package_groups))
 
         dienste = resolution.services_for(EnableIn.LIVE)
@@ -220,6 +225,20 @@ class IsoPanelRahmen(QWidget):
 
     def setze_sichtbar(self, sichtbar: bool) -> None:
         self.setVisible(sichtbar)
+
+
+def _repositorien(resolution) -> list[str]:
+    """Genau die Liste, die in der erzeugten pacman.conf stehen wird."""
+    from ...core.archiso.pacman_conf import BASE_REPOSITORIES, OPTIONAL_ORDER
+
+    namen = list(BASE_REPOSITORIES)
+    for name in OPTIONAL_ORDER:
+        if name in resolution.repositories and name not in namen:
+            namen.append(name)
+    for name in resolution.repositories:
+        if name not in namen:
+            namen.append(name)
+    return namen
 
 
 __all__ = ["IsoPanel", "IsoPanelRahmen"]

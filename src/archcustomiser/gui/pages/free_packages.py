@@ -62,7 +62,8 @@ def _farbe(kind: EntryKind) -> str:
     if kind is EntryKind.PACKAGE:
         return p.success
     if kind in (EntryKind.GROUP, EntryKind.PROVIDES_UNIQUE):
-        return p.accent
+        # ``accent_lesbar`` statt ``accent``: hier steht Text, keine Flaeche.
+        return p.accent_lesbar
     if kind in (EntryKind.PROVIDES_AMBIG, EntryKind.AUR):
         return p.warning
     if kind in (EntryKind.NOT_FOUND, EntryKind.INVALID_NAME):

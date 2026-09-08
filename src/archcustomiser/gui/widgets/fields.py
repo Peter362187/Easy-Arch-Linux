@@ -43,6 +43,7 @@ from ...core import choices as choice_registry
 from ...core.catalog import FieldSpec
 from ..design import tokens
 from ..design.typo import BODY, CAPTION, schrift
+from .common import setze_rolle
 
 log = logging.getLogger(__name__)
 
@@ -93,17 +94,21 @@ class FieldRow(QWidget):
         self.meldung.hide()
         aussen.addWidget(self.meldung)
 
-        self.widget.setAccessibleName(spec.label)
-        if spec.help:
-            self.widget.setAccessibleDescription(spec.help)
+        # Der Stern erreicht Vorlesewerkzeuge sonst nicht: er steht an der
+        # Beschriftung, und die ist mit dem Eingabefeld nicht verknuepft.
+        self.widget.setAccessibleName(
+            spec.label + (" (Pflichtfeld)" if spec.required else "")
+        )
+        teile = [t for t in ("Pflichtfeld" if spec.required else "", spec.help) if t]
+        if teile:
+            self.widget.setAccessibleDescription(". ".join(teile))
+        if spec.required:
+            self.widget.setToolTip("Pflichtfeld")
 
     # -- Anzeige --------------------------------------------------------------
     def zeige_meldung(self, text: str, *, warnung: bool) -> None:
         self.meldung.setText(text)
-        self.meldung.setProperty("rolle", "warnung" if warnung else "fehler")
-        # Eine geaenderte Property wirkt erst nach einem Neupolieren.
-        self.meldung.style().unpolish(self.meldung)
-        self.meldung.style().polish(self.meldung)
+        setze_rolle(self.meldung, "warnung" if warnung else "fehler")
         self.meldung.show()
 
     def verstecke_meldung(self) -> None:
@@ -144,6 +149,12 @@ class FieldRow(QWidget):
         try:
             if isinstance(self.widget, QLineEdit):
                 self.widget.clear()
+                # Auch den Anzeigen-Schalter zuruecksetzen: nach dem
+                # Laden eines Profils blieb sonst ein Feld offen stehen,
+                # in das gleich wieder ein Passwort getippt wird.
+                for aktion in self.widget.actions():
+                    if aktion.isCheckable() and aktion.isChecked():
+                        aktion.setChecked(False)
         finally:
             self.widget.blockSignals(blockiert)
 
@@ -198,13 +209,25 @@ def _erzeuge_widget(spec: FieldSpec) -> tuple[QWidget, QPushButton | None]:
 
 
 def _anzeigeschalter(edit: QLineEdit) -> None:
-    """Ein Auge im Feld, mit dem sich das Passwort kurz zeigen laesst."""
+    """Ein Auge im Feld, mit dem sich das Passwort kurz zeigen laesst.
+
+    ``QLineEdit`` zeichnet fuer eine Aktion **nur** deren Symbol -- der Text
+    einer QAction erscheint dort nie. Ohne Symbol war der Schalter also eine
+    leere, unsichtbare Flaeche am rechten Feldrand, die niemand findet.
+    """
     from PySide6.QtGui import QAction
+
+    from .icons import load_icon
 
     aktion = QAction(edit)
     aktion.setText("Anzeigen")
     aktion.setToolTip("Passwort anzeigen")
     aktion.setCheckable(True)
+    symbol = load_icon("eye", groesse=16)
+    if symbol is not None:
+        # ``setIcon(None)`` wirft -- ein fehlendes Symbol darf die Seite
+        # nicht mitreissen.
+        aktion.setIcon(symbol)
 
     def umschalten(sichtbar: bool) -> None:
         edit.setEchoMode(

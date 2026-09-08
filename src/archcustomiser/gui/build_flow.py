@@ -31,7 +31,7 @@ from PySide6.QtWidgets import QDialog, QMessageBox, QWidget
 
 from ..core.build.preflight import NOT_BUILDABLE_HERE
 from ..core.catalog import Catalog
-from ..core.plan import plan_as_text
+from ..core.plan import build_plan, plan_as_text
 from .build_worker import BuildJob
 from .store import SelectionStore
 from .widgets.wait_dialog import run_with_wait
@@ -62,17 +62,52 @@ class BuildFlow(QObject):
         self.store = store
         self.fenster = fenster
         self.bauweg = ""
+        self._job: BuildJob | None = None
+
+    def _alten_auftrag_freigeben(self) -> None:
+        """Gibt den vorigen Auftrag frei -- wenn er nicht mehr arbeitet.
+
+        Ein noch laufender bleibt: ihn wegzuraeumen hiesse, einen Faden
+        unter sich selbst zu loeschen.
+        """
+        alt = self._job
+        self._job = None
+        if alt is None:
+            return
+        if alt.busy:
+            log.debug("Vorheriger Bauauftrag arbeitet noch -- bleibt bestehen")
+            self._job = alt
+            return
+        alt.setParent(None)
+        alt.deleteLater()
 
     # -- Ablauf ---------------------------------------------------------------
-    def start(self, plan=None) -> None:
-        if plan is not None:
-            log.info("Bauplan:\n%s", plan_as_text(plan))
+    def start(self) -> None:
+        # Den Bauplan ins Protokoll, bevor irgendetwas geschieht. Er ist bei
+        # einer spaeteren Fehlersuche das Wertvollste, was dort steht -- und
+        # der frueher dafuer vorgesehene Parameter wurde von keiner
+        # Aufrufstelle je gefuellt.
+        self._plan_protokollieren()
 
         ziel = self._ziel_waehlen()
         if ziel is _ABGEBROCHEN:
             self.abgebrochen.emit()
             return
         self._vorabpruefung(ziel)
+
+    def _plan_protokollieren(self) -> None:
+        """Der Bauplan gehoert ins Protokoll, nicht in eine Seite.
+
+        ``BuildFlow`` hat Katalog und Store ohnehin; ihn von aussen
+        durchzureichen hiesse, die Bauseite an die Zusammenfassungsseite zu
+        koppeln.
+        """
+        try:
+            plan = build_plan(self.catalog, self.store.config, self.store.resolution())
+        except Exception:      # ein Protokolleintrag darf nie einen Bau verhindern
+            log.debug("Bauplan nicht erzeugbar", exc_info=True)
+            return
+        log.info("Bauplan:\n%s", plan_as_text(plan))
 
     # -- Zielwahl -------------------------------------------------------------
     def _ziel_waehlen(self):
@@ -141,8 +176,17 @@ class BuildFlow(QObject):
         from ..core.build import wsl
         from ..core.build.targets import WslExecutionTarget
 
-        status, fehler = run_with_wait(
-            wsl.detect,
+        def suchen():
+            # Die Suche gehoert mit in den Hintergrundfaden. ``find_arch``
+            # befragt jede Verteilung, deren Name nichts verraet, ueber
+            # ``wsl.exe`` -- je Aufruf bis zu 60 s Zeitlimit, und eine
+            # gestoppte Verteilung wird dabei erst gestartet. Im
+            # Oberflaechenfaden stand das Fenster genau so lange still.
+            status = wsl.detect()
+            return status, status.find_arch(probe=_ist_arch)
+
+        ergebnis, fehler = run_with_wait(
+            suchen,
             "Linux-Untersystem wird geprueft ...\n\n"
             "Das kann einen Moment dauern, wenn die Verteilung erst "
             "starten muss.",
@@ -159,10 +203,10 @@ class BuildFlow(QObject):
             # -- und bekam die irrefuehrende Frage 'ISO-Build hier nicht
             # moeglich, Profil exportieren?'.
             return _ABGEBROCHEN
-        if status is None:
+        if ergebnis is None:
             return _ABGEBROCHEN          # vom Benutzer abgebrochen
 
-        gefunden = status.find_arch(probe=_ist_arch)
+        status, gefunden = ergebnis
         if status.installed and gefunden is not None:
             self.bauweg = f"WSL-Verteilung {gefunden.name}"
             return WslExecutionTarget(wsl.WslTarget(gefunden.name))
@@ -194,6 +238,11 @@ class BuildFlow(QObject):
         # Eine eigene Kopie: waehrend der Bau laeuft, darf der Benutzer die
         # Konfiguration weiter ansehen, ohne dass sich der laufende Bau
         # darunter veraendert.
+        # Der vorige Auftrag wird abgeraeumt. Jeder haelt einen
+        # BuildController mit eigener Konfigurationskopie, seiner
+        # Aufloesung und dem Zeilenpuffer fest -- bei jedem "Erneut
+        # pruefen" kam einer dazu und blieb bis zum Programmende.
+        self._alten_auftrag_freigeben()
         job = BuildJob(
             self.catalog,
             config.copy(),
@@ -203,6 +252,7 @@ class BuildFlow(QObject):
         )
         if ziel is not None:
             job.controller.target = ziel
+        self._job = job
 
         report, fehler = run_with_wait(
             lambda: job.preflight(work_dir, out_dir),

@@ -278,7 +278,17 @@ def _trifft(option: Option, begriff: str) -> bool:
     Der Paketname ist oft das, was der Benutzer im Kopf hat -- wer "steam"
     sucht, denkt nicht an "Spieleplattform".
     """
-    felder = [option.label, option.description, option.id, *option.packages]
+    # ``option.packages`` sind ``PackageRef``-Objekte. Ungefiltert lieferte
+    # ``str()`` daraus "packageref(name='steam', when=..., reason='')" --
+    # die Suche traf den Namen nur zufaellig als Teilstring, dafuer aber
+    # auch jede Eingabe wie "when" oder "reason".
+    felder = (
+        option.label,
+        option.description,
+        option.id,
+        *(paket.name for paket in option.packages),
+        *option.package_groups,
+    )
     return any(begriff in str(feld).lower() for feld in felder if feld)
 
 

@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 from ...core.catalog import Category
@@ -116,12 +116,30 @@ class PageBase(QWidget):
     def add_help_link(self) -> None:
         if self.category is None or not self.category.help_url:
             return
-        link = QLabel(
-            f'<a href="{self.category.help_url}">Weitere Informationen im Arch-Wiki</a>'
-        )
+        ziel = self.category.help_url
+        link = QLabel(f'<a href="{ziel}">Weitere Informationen: {_gastgeber(ziel)}</a>')
         link.setOpenExternalLinks(True)
+        # Ohne diese Flagge ist der Link nur mit der Maus erreichbar -- er
+        # kommt gar nicht erst in die Tabreihenfolge.
+        link.setTextInteractionFlags(
+            Qt.TextInteractionFlag.LinksAccessibleByMouse
+            | Qt.TextInteractionFlag.LinksAccessibleByKeyboard
+        )
         link.setFont(schrift(CAPTION))
         self._root.addWidget(link)
+
+
+def _gastgeber(url: str) -> str:
+    """Der Rechnername einer Adresse -- als Beschriftung des Links.
+
+    "Arch-Wiki" stand fest im Code, obwohl ``help_url`` aus dem Katalog kommt
+    und ueberallhin zeigen darf. Bei einem Overlay, das auf eine eigene Seite
+    verweist, war die Beschriftung schlicht falsch.
+    """
+    from urllib.parse import urlparse
+
+    name = urlparse(url).netloc
+    return name.removeprefix("www.") or url
 
 
 __all__ = ["PageBase"]

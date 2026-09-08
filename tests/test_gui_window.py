@@ -430,13 +430,29 @@ def test_the_search_filters_by_package_name(window) -> None:
     """Wer "steam" sucht, denkt nicht an "Spieleplattform"."""
     seite = window._pages["apps"]
     seite.enter()
+    gesamt = len(seite._karten)
     seite.search.edit.setText("steam")
     seite._filtern()
+
     sichtbar = [
-        karte.option.id for karte in seite._karten.values() if not karte.isHidden()
+        karte.option for karte in seite._karten.values() if not karte.isHidden()
     ]
     assert sichtbar, "die Suche findet nichts"
-    assert all("steam" in k.lower() or True for k in sichtbar)
+    assert len(sichtbar) < gesamt, "die Suche filtert gar nicht"
+    for option in sichtbar:
+        felder = " ".join(
+            str(feld).lower()
+            for feld in (option.label, option.description, option.id, *option.packages)
+            if feld
+        )
+        assert "steam" in felder, f"{option.id} passt nicht zur Suche"
+    # Der Paketname ist der Punkt: die Beschriftung heisst "Steam", die
+    # Beschreibung "Spieleplattform von Valve" -- gefunden werden muss es auch
+    # ueber den Paketnamen.
+    assert any(
+        any("steam" in str(paket).lower() for paket in option.packages)
+        for option in sichtbar
+    )
 
 
 def test_the_selected_filter_narrows_the_grid(window, store) -> None:
@@ -479,12 +495,34 @@ def test_the_stylesheet_contains_no_none(window) -> None:
 
 
 def test_nothing_animates_while_the_window_just_sits_there(window) -> None:
-    """Eine Oberflaeche im Leerlauf darf keine Rechenzeit verbrauchen."""
+    """Eine Oberflaeche im Leerlauf darf keine Rechenzeit verbrauchen.
+
+    Bewegung wird dafuer ausdruecklich eingeschaltet. Der uebrige Lauf setzt
+    ``ARCHCUSTOMISER_MOTION=off``; dort ist jede Dauer null und ``animate()``
+    betritt die Buchfuehrung gar nicht erst -- der Test koennte nur immer null
+    sehen und waere wertlos.
+    """
+    from PySide6.QtCore import QEventLoop, QTimer
+
     from archcustomiser.gui import motion
 
-    window.show()
-    window.grab()
-    assert motion.active_count() == 0
+    vorher = motion.is_reduced()
+    motion.set_reduced(False)
+    try:
+        window.resize(1280, 800)
+        window.show()
+        # Ein Seitenwechsel animiert -- danach muss die Buchfuehrung wieder
+        # leer sein.
+        window._gehe_zu("basics")
+        schleife = QEventLoop()
+        QTimer.singleShot(600, schleife.quit)
+        schleife.exec()
+
+        window.grab()
+        assert motion.active_count() == 0
+    finally:
+        motion.stop_all()
+        motion.set_reduced(vorher)
 
 
 def test_every_page_renders_offscreen(window) -> None:
@@ -613,3 +651,70 @@ def test_the_live_check_never_asks_the_aur(window, monkeypatch) -> None:
     seite.editor.setPlainText("neovim")
     seite._pruefen()
     assert gefragt and not any(gefragt)
+
+
+# ---------------------------------------------------------------------------
+# Der Start selbst
+# ---------------------------------------------------------------------------
+
+
+def test_the_application_actually_starts(qapp, monkeypatch, tmp_path) -> None:
+    """Der Weg, den jeder Benutzer nimmt -- und den kein Test ging.
+
+    ``run()`` rief einmal ``settings.animationen_reduzieren()`` auf. Das ist
+    eine Eigenschaft, kein Aufruf: das Ergebnis war ein ``bool``, die Klammern
+    riefen es auf, und das Programm stuerzte beim Start ab, bevor ein Fenster
+    zu sehen war. Kein Test hat je ``run()`` aufgerufen.
+    """
+    from archcustomiser.gui import app as modul
+
+    fenster: list = []
+
+    class FakeFenster:
+        def __init__(self, *args, **kwargs) -> None:
+            fenster.append(self)
+
+        def show(self) -> None:
+            pass
+
+    monkeypatch.setattr(modul, "MainWindow", FakeFenster)
+    monkeypatch.setattr(modul.QApplication, "exec", lambda self: 0)
+    monkeypatch.setattr(
+        "archcustomiser.gui.packages_worker.PackageController.start",
+        lambda self, *a, **k: None,
+    )
+    monkeypatch.setattr(
+        "archcustomiser.gui.widgets.intro.zeige_einmal", lambda _f: None
+    )
+
+    assert modul.run([]) == 0
+    assert fenster, "es wurde kein Fenster erzeugt"
+
+
+def test_a_category_without_a_page_type_is_dropped_from_the_navigation(
+    qapp, catalog, settings, theme, paketdienst, monkeypatch
+) -> None:
+    """Ein Schritt ohne Widget waere ein Schritt, in dem man haengenbleibt.
+
+    Die Seitenfabrik gibt bei einem unbekannten ``page_type`` ``None`` zurueck.
+    Der Schritt blieb trotzdem in der Navigation stehen, war anklickbar -- und
+    beim Betreten gab es kein Widget.
+    """
+    from archcustomiser.gui.pages import factory as fabrik
+
+    echte = fabrik.PageFactory.create
+
+    def kein_apps(self, category):
+        return None if category.id == "apps" else echte(self, category)
+
+    monkeypatch.setattr(fabrik.PageFactory, "create", kein_apps)
+
+    fenster = _fenster(qapp, catalog, settings, theme, paketdienst)
+    try:
+        kennungen = {schritt.id for schritt in fenster.model.steps}
+        assert "apps" not in kennungen
+        assert "basics" in kennungen
+        for schritt in fenster.model.steps:
+            assert schritt.id in fenster._pages
+    finally:
+        _abraeumen(qapp, fenster)

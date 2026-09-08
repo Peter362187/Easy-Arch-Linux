@@ -31,6 +31,28 @@ from .widgets.export_dialog import ErrorDialog, ExportResultDialog
 log = logging.getLogger(__name__)
 
 
+def passwort_hinweis(catalog: Catalog, felder) -> str:
+    """Sagt, in welchem Schritt das Passwort neu einzugeben ist.
+
+    Der Name des Schrittes stand an zwei Stellen als Literal im Code --
+    obwohl er aus dem Katalog kommt und ein Overlay ihn aendern darf.
+    """
+    namen = []
+    for category in catalog.categories:
+        for spec in category.fields:
+            if spec.secret and spec.binding in set(felder or ()):
+                if category.title not in namen:
+                    namen.append(category.title)
+    wohin = (
+        f"im Schritt '{namen[0]}'"
+        if len(namen) == 1
+        else ("in den Schritten " + ", ".join(f"'{n}'" for n in namen))
+        if namen
+        else "im betroffenen Schritt"
+    )
+    return f"Profile enthalten keine Passwoerter. Bitte das Passwort {wohin} neu eingeben."
+
+
 class ProfileActions(QObject):
     """Alles, was mit Profildateien zu tun hat."""
 
@@ -96,8 +118,7 @@ class ProfileActions(QObject):
             QMessageBox.information(
                 self.fenster,
                 "Passwort erneut eingeben",
-                "Profile enthalten keine Passwoerter. Bitte das Passwort im "
-                "Schritt 'Benutzerkonto' neu eingeben.",
+                passwort_hinweis(self.catalog, ergebnis.secret_fields),
             )
         self._gesicherter_stand = self.fingerprint()
         self.profileLoaded.emit()

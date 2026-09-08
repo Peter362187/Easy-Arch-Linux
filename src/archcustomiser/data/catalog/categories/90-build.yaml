@@ -91,6 +91,7 @@ fields:
       installiert werden kann.
 
   - id: include_memtest
+    preview_role: "include_memtest"
     label: "Speichertest ins Bootmenue aufnehmen"
     widget: bool
     default: false

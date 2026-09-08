@@ -12,7 +12,7 @@ den Uebergang faellt das nicht auf; laenger darf er deshalb nicht werden.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QRect, Qt
+from PySide6.QtCore import QRect, Qt, QVariantAnimation
 from PySide6.QtGui import QPainter, QPixmap
 from PySide6.QtWidgets import QStackedWidget, QWidget
 
@@ -56,6 +56,7 @@ class AnimatedStack(QStackedWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._laeuft: _Uebergang | None = None
+        self._animation: QVariantAnimation | None = None
 
     def set_current(self, index: int, *, richtung: int = 1) -> None:
         """Wechselt zur Seite; ``richtung`` 1 heisst vorwaerts, -1 zurueck."""
@@ -85,9 +86,10 @@ class AnimatedStack(QStackedWidget):
 
         def fertig() -> None:
             self._laeuft = None
+            self._animation = None
             overlay.deleteLater()
 
-        motion.animate(
+        self._animation = motion.animate(
             overlay,
             von=0.0,
             bis=1.0,
@@ -102,6 +104,12 @@ class AnimatedStack(QStackedWidget):
         super().resizeEvent(event)
 
     def _abbrechen(self) -> None:
+        # Erst anhalten, dann wegraeumen. Wird das Overlay unter einer
+        # laufenden Animation geloescht, endet die nie regulaer -- und ihr
+        # Eintrag in der Buchfuehrung von ``motion`` bliebe stehen.
+        if self._animation is not None:
+            self._animation.stop()
+            self._animation = None
         if self._laeuft is not None:
             self._laeuft.deleteLater()
             self._laeuft = None
